@@ -208,6 +208,8 @@
     <string name="st_job_phase_copying">Copying artifact into Core protection</string>
     <string name="st_job_phase_preflight">Archive preflight</string>
     <string name="st_job_phase_extracting">Safe extraction</string>
+    <string name="st_job_phase_runtime_download">Downloading verified runtime layer</string>
+    <string name="st_job_phase_runtime_verify">Verifying signed runtime layer</string>
     <string name="st_job_phase_toolchain">Preparing bundled npm toolchain</string>
     <string name="st_job_phase_dependencies">Installing production dependencies (may take several minutes)</string>
     <string name="st_job_phase_bundle">Building local lib.js bundle (may take several minutes)</string>

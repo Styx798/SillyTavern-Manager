@@ -14,6 +14,7 @@ import android.system.Os
 import android.system.OsConstants
 import android.util.Log
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmDeviceLocalNpmSlotPreparer
+import io.github.styx798.sillytavernmanager.stmcore.installer.StmGitHubPrebuiltSlotPreparer
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmInstallerCoordinator
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmInstallerCoordinatorFailpoint
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmInstallerCoordinatorFaultInjector
@@ -77,6 +78,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 StmCorePaths.initializeCoreLayout(this)
                 val recovered = recoverState(checkpointStore.read())
                 checkpointStore.write(recovered)
+                val localRuntimePreparer = StmDeviceLocalNpmSlotPreparer(this)
                 val coordinator = StmInstallerCoordinator(
                     installerCacheRoot = StmCorePaths.installerCacheRoot(this),
                     stagingRoot = StmCorePaths.stagingRoot(this),
@@ -84,7 +86,10 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     activeFile = StmCorePaths.activeSlotFile(this),
                     journalRoot = StmCorePaths.installerJournalRoot(this),
                     eventSink = { event -> mainHandler.post { applyInstallerEvent(event) } },
-                    runtimeSlotPreparer = StmDeviceLocalNpmSlotPreparer(this),
+                    runtimeSlotPreparer = StmGitHubPrebuiltSlotPreparer(
+                        localFallback = localRuntimePreparer,
+                        runnableAcceptor = localRuntimePreparer,
+                    ),
                     faultInjector = debugInstallerFaultInjector(),
                     checkpointTerminalOperationIds = recovered.jobs
                         .filter { it.state !in ACTIVE_JOB_STATES }

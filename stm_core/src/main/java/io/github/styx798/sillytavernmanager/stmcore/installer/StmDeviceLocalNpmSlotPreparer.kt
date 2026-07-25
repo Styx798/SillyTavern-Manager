@@ -37,6 +37,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal enum class StmRuntimeSlotPreparationPhase {
+    DOWNLOADING_RUNTIME_LAYER,
+    VERIFYING_RUNTIME_LAYER,
     PREPARING_TOOLCHAIN,
     INSTALLING_DEPENDENCIES,
     BUILDING_BUNDLE,
@@ -63,6 +65,8 @@ internal enum class StmRuntimeSlotPreparationErrorCode {
     BUNDLE_BUILD_FAILED,
     RUNTIME_ASSEMBLY_FAILED,
     RUNNABLE_ACCEPTANCE_FAILED,
+    PREBUILT_RUNTIME_REJECTED,
+    PREBUILT_RUNTIME_INTEGRATION_FAILED,
 }
 
 internal class StmRuntimeSlotPreparationException(
@@ -80,6 +84,14 @@ internal fun interface StmRuntimeSlotPreparer {
     ): StmRuntimeSlotAdmissionEvidence
 }
 
+internal fun interface StmRuntimeSlotRunnableAcceptor {
+    fun accept(
+        request: StmRuntimeSlotPreparationRequest,
+        expectedBundle: StmRuntimeFileBinding,
+        cancellation: StmExtractionCancellation,
+    )
+}
+
 private val STM_WEBPACK_CACHE_VERSION_PATTERN = Regex("^[0-9a-f]{16}$")
 
 internal fun stmIsSafeWebpackCacheVersion(value: String): Boolean =
@@ -95,7 +107,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
         StmBundledNpmToolchainFactory.create(appContext.applicationContext),
     private val npmTimeoutMillis: Long = NPM_TIMEOUT_MILLIS,
     private val bundleTimeoutMillis: Long = BUNDLE_TIMEOUT_MILLIS,
-) : StmRuntimeSlotPreparer {
+) : StmRuntimeSlotPreparer, StmRuntimeSlotRunnableAcceptor {
     override fun prepare(
         request: StmRuntimeSlotPreparationRequest,
         cancellation: StmExtractionCancellation,
@@ -252,6 +264,29 @@ internal class StmDeviceLocalNpmSlotPreparer(
                 error,
             )
         }
+    }
+
+    override fun accept(
+        request: StmRuntimeSlotPreparationRequest,
+        expectedBundle: StmRuntimeFileBinding,
+        cancellation: StmExtractionCancellation,
+    ) {
+        val operation = requireDirectory(request.operationRoot.toPath(), "installer operation")
+        val payload = requireDirectory(request.payloadDirectory.toPath(), "source payload")
+        check(payload.parent == operation && payload.fileName.toString() == PAYLOAD_DIRECTORY) {
+            "Source payload is not the direct payload child of its installer operation"
+        }
+        check(SAFE_ARCHIVE_ROOT.matches(request.archiveRoot)) { "Source archive root is unsafe" }
+        val program = requireDirectory(payload.resolve(request.archiveRoot), "SillyTavern program")
+        check(program.parent == payload) { "SillyTavern program escaped its source payload" }
+        acceptRunnable(
+            request = request,
+            payload = payload,
+            program = program,
+            operation = operation,
+            expectedBundle = expectedBundle,
+            cancellation = cancellation,
+        )
     }
 
     private fun runNpmCli(

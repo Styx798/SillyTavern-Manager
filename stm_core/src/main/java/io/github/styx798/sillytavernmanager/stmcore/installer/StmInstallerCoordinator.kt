@@ -577,6 +577,20 @@ internal class StmInstallerCoordinator(
                     },
                     onPhase = { phase ->
                         val (journalPhase, jobPhase, progress) = when (phase) {
+                            StmRuntimeSlotPreparationPhase.DOWNLOADING_RUNTIME_LAYER ->
+                                Triple(
+                                    StmInstallerJournalPhase.DOWNLOADING_RUNTIME_LAYER,
+                                    StmCoreJobPhase.DOWNLOADING_RUNTIME_LAYER,
+                                    0.28,
+                                )
+
+                            StmRuntimeSlotPreparationPhase.VERIFYING_RUNTIME_LAYER ->
+                                Triple(
+                                    StmInstallerJournalPhase.VERIFYING_RUNTIME_LAYER,
+                                    StmCoreJobPhase.VERIFYING_RUNTIME_LAYER,
+                                    0.42,
+                                )
+
                             StmRuntimeSlotPreparationPhase.PREPARING_TOOLCHAIN ->
                                 Triple(
                                     StmInstallerJournalPhase.PREPARING_TOOLCHAIN,

@@ -1253,6 +1253,10 @@ private fun StmCoreJobPhase.displayName(): String = when (this) {
     StmCoreJobPhase.COPYING_ARTIFACT -> stringResource(R.string.st_job_phase_copying)
     StmCoreJobPhase.PREFLIGHT -> stringResource(R.string.st_job_phase_preflight)
     StmCoreJobPhase.EXTRACTING -> stringResource(R.string.st_job_phase_extracting)
+    StmCoreJobPhase.DOWNLOADING_RUNTIME_LAYER ->
+        stringResource(R.string.st_job_phase_runtime_download)
+    StmCoreJobPhase.VERIFYING_RUNTIME_LAYER ->
+        stringResource(R.string.st_job_phase_runtime_verify)
     StmCoreJobPhase.PREPARING_TOOLCHAIN -> stringResource(R.string.st_job_phase_toolchain)
     StmCoreJobPhase.INSTALLING_DEPENDENCIES ->
         stringResource(R.string.st_job_phase_dependencies)

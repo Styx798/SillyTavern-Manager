@@ -208,6 +208,8 @@
     <string name="st_job_phase_copying">复制 Artifact 到 Core 保护区</string>
     <string name="st_job_phase_preflight">归档预检</string>
     <string name="st_job_phase_extracting">安全解压</string>
+    <string name="st_job_phase_runtime_download">下载已验证运行层</string>
+    <string name="st_job_phase_runtime_verify">验证签名运行层</string>
     <string name="st_job_phase_toolchain">准备内置 npm 工具链</string>
     <string name="st_job_phase_dependencies">安装 production 依赖（可能需要数分钟）</string>
     <string name="st_job_phase_bundle">本地构筑 lib.js（可能需要数分钟）</string>
