@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+
+# Android Studio / Gradle
+.idea/
+.gradle/
+.kotlin/
+**/build/
+**/build */
+**/build.stale-*/
+local.properties
+*.iml
+.externalNativeBuild/
+.cxx/
+captures/
+
+# JavaScript dependencies and generated output
+node_modules/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+key.properties
+secrets.properties
+credentials*.json
+
+# IDE and local tooling
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name=".testing.StmCoreExperimentService"
+            android:exported="false"
+            android:process=":stm_core"
+            android:stopWithTask="false" />
+    </application>
+
+</manifest>

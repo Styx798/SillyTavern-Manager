@@ -1,0 +1,43 @@
+[versions]
+agp = "9.3.0"
+kotlin = "2.3.21"
+composeBom = "2026.06.00"
+activityCompose = "1.13.0"
+coreKtx = "1.18.0"
+lifecycle = "2.10.0"
+coroutines = "1.10.2"
+junit = "4.13.2"
+javet = "5.0.9"
+commonsCompress = "1.28.0"
+commonsCodec = "1.19.0"
+commonsIo = "2.20.0"
+commonsLang3 = "3.18.0"
+bouncyCastle = "1.85.1"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+junit = { module = "junit:junit", version.ref = "junit" }
+javet-node-android = { module = "com.caoccao.javet:javet-node-android", version.ref = "javet" }
+javet-node-android-i18n = { module = "com.caoccao.javet:javet-node-android-i18n", version.ref = "javet" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
+commons-codec = { module = "commons-codec:commons-codec", version.ref = "commonsCodec" }
+commons-io = { module = "commons-io:commons-io", version.ref = "commonsIo" }
+commons-lang3 = { module = "org.apache.commons:commons-lang3", version.ref = "commonsLang3" }
+bouncy-castle = { module = "org.bouncycastle:bcprov-jdk15to18", version.ref = "bouncyCastle" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
