@@ -2,6 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application>
+        <activity
+            android:name=".testing.StmCoreGate3bRuntimeImageObbActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:turnScreenOn="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="io.github.styx798.sillytavernmanager.category.RUNTIME_IMAGE_OBB" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".testing.StmCoreExperimentService"
             android:exported="false"

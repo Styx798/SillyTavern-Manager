@@ -406,6 +406,9 @@ class StmCoreExperimentService : Service() {
                             retainCommittedSlot = false,
                         )
 
+                    StmCoreExperiment.GATE3B_RUNTIME_IMAGE_OBB ->
+                        runGate3bRuntimeImageObbExperiment(request.requestId)
+
                     StmCoreExperiment.GATE3B_FAULT_MATRIX ->
                         runGate3bFaultMatrixExperiment(request.requestId)
 
@@ -630,6 +633,11 @@ class StmCoreExperimentService : Service() {
 
     private fun runGate3bTreeDiffExperiment(requestId: String): Map<String, String> {
         val experiment = StmCoreGate3bTreeDiffExperiment(this)
+        return runRegisteredGate3bExperiment(requestId, experiment)
+    }
+
+    private fun runGate3bRuntimeImageObbExperiment(requestId: String): Map<String, String> {
+        val experiment = StmCoreGate3bRuntimeImageObbExperiment(this)
         return runRegisteredGate3bExperiment(requestId, experiment)
     }
 

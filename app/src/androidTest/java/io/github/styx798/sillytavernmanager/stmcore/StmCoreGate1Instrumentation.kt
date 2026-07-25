@@ -131,6 +131,9 @@ class StmCoreGate1Instrumentation : Instrumentation() {
                                 "3b-ready-slot-cold" ->
                                     runGate3bColdSlotExperiment(result)
 
+                                "3b-runtime-image-obb" ->
+                                    runGate3bRuntimeImageObbExperiment(result)
+
                                 "3b-fault-matrix" ->
                                     runGate3bFaultMatrix(result)
 
@@ -743,6 +746,28 @@ class StmCoreGate1Instrumentation : Instrumentation() {
         }
     }
 
+    private suspend fun runGate3bRuntimeImageObbExperiment(result: Bundle) {
+        requireGate3bRunnableCoreStopped()
+        val outcome = runExperiment(
+            StmCoreExperiment.GATE3B_RUNTIME_IMAGE_OBB,
+            GATE3B_RUNTIME_IMAGE_TIMEOUT_MILLIS,
+        )
+        check(outcome is ExperimentOutcome.Completed) {
+            "Runtime Image OBB experiment terminated the Core process"
+        }
+        outcome.result.values.forEach { (key, value) ->
+            result.putString("gate3b_runtime_image_$key", value)
+        }
+        check(
+            outcome.result.values["result"] == "passed" &&
+                outcome.result.values["obb_read_only"] == "true" &&
+                outcome.result.values["obb_tree_matches_extracted"] == "true" &&
+                outcome.result.values["port_released"] == "true"
+        ) {
+            "Runtime Image OBB experiment failed: ${outcome.result.values}"
+        }
+    }
+
     private suspend fun runGate4SillyTavernLifecycle(result: Bundle) {
         val application = targetContext.applicationContext as StmApplication
         val controller = onMain {
@@ -1339,6 +1364,7 @@ class StmCoreGate1Instrumentation : Instrumentation() {
         const val GATE3B_CANCELLATION_EXPERIMENT_TIMEOUT_MILLIS = 60_000L
         const val GATE3B_READY_SLOT_TIMEOUT_MILLIS = 900_000L
         const val GATE3B_READY_RECOVERY_TIMEOUT_MILLIS = 300_000L
+        const val GATE3B_RUNTIME_IMAGE_TIMEOUT_MILLIS = 900_000L
         const val GATE4_STATE_TIMEOUT_MILLIS = 90_000L
         const val GATE4_STOP_TIMEOUT_MILLIS = 180_000L
         const val GATE4_HTTP_TIMEOUT_MILLIS = 10_000
