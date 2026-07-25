@@ -1,4 +1,5 @@
 {
+  "archive_package_instances_without_any_root_license_like_file": 9,
   "archive_root": "npm",
   "declared_license_value_counts": [
     {
@@ -3810,9 +3811,15 @@
     }
   ],
   "package_instance_count": 201,
+  "package_instances_without_any_license_text": 0,
   "package_instances_without_any_root_license_like_file": 9,
   "package_instances_without_standard_root_license_file": 14,
-  "schema_version": 1,
+  "schema_version": 2,
+  "supplemental_license_inventory": {
+    "asset_path": "third_party/npm-11.6.2/SUPPLEMENTAL-LICENSES.json",
+    "bytes": 9307,
+    "sha256": "6081c68a5fad9f801dafb1412cc42663150d83115997eeda3e2cdf1a29db59ab"
+  },
   "tool": "npm",
   "tool_version": "11.6.2",
   "unique_name_version_count": 191

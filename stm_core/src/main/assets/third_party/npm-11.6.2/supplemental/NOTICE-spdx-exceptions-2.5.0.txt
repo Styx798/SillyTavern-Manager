@@ -1,0 +1,20 @@
+spdx-exceptions 2.5.0 attribution notice
+
+Package: spdx-exceptions
+Version: 2.5.0
+Declared license: CC-BY-3.0
+Package author: The Linux Foundation
+Source repository: https://github.com/kemitchell/spdx-exceptions.json
+Source commit: 3aa64bec339abc6a3eca00c3436aaa7e154b8799
+
+The package README attributes the underlying SPDX material as follows:
+
+Copyright (c) 2010-2015 Linux Foundation and its Contributors.
+Licensed under the Creative Commons Attribution License 3.0 Unported.
+All other rights are expressly reserved.
+
+The package author, Kyle Mitchell, states that the package was created by
+mechanically copying exception identifiers from the SPDX specification.
+
+The complete Creative Commons Attribution 3.0 Unported license text is
+included alongside this notice in CC-BY-3.0.txt.

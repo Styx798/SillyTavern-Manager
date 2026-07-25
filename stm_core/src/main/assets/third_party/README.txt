@@ -53,13 +53,20 @@ The deterministic asset identity and its required entry hashes are recorded at:
 
   stm_core/tools/npm/11.6.2/npm-tool-manifest.stm
 
-The npm Artistic-2.0 license and a path-specific inventory for the bundled package
+The npm Artistic-2.0 license and path-specific inventories for the bundled package
 instances are included at:
 
   third_party/npm-11.6.2/LICENSE.txt
   third_party/npm-11.6.2/PACKAGE-LICENSES.json
+  third_party/npm-11.6.2/SUPPLEMENTAL-LICENSES.json
+  third_party/npm-11.6.2/supplemental/
 
 The upstream npm tarball contains nine package instances with a declared SPDX license
-but no package-local license text. Their exact paths and metadata remain visible in the
-inventory; release clearance requires completing those notices. SillyTavern Manager is
-not affiliated with npm, Inc. or GitHub, Inc., and does not use the npm logo.
+but no package-local license text. STM keeps that upstream fact visible in
+PACKAGE-LICENSES.json and supplies the missing complete license and attribution texts
+separately. SUPPLEMENTAL-LICENSES.json binds every affected archive path to its exact
+package version, registry identity, upstream repository revision, and supplemental
+asset hash. The resulting npm toolchain license gap count is zero.
+
+SillyTavern Manager is not affiliated with npm, Inc. or GitHub, Inc., and does not use
+the npm logo.

@@ -18,6 +18,7 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileSystemOperations
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
@@ -76,6 +77,14 @@ abstract class VerifyBundledNpmToolAsset : DefaultTask() {
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val licenseInventoryFile: RegularFileProperty
 
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val supplementalLicenseInventoryFile: RegularFileProperty
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val supplementalLicenseDirectory: DirectoryProperty
+
     @TaskAction
     fun verify() {
         val archive = requireRegularNoFollow(archiveFile.get().asFile, "npm tool archive")
@@ -84,6 +93,12 @@ abstract class VerifyBundledNpmToolAsset : DefaultTask() {
             licenseInventoryFile.get().asFile,
             "npm package license inventory",
         )
+        val supplementalInventory = requireRegularNoFollow(
+            supplementalLicenseInventoryFile.get().asFile,
+            "npm supplemental license inventory",
+        )
+        val supplementalDirectory = supplementalLicenseDirectory.get().asFile
+        verifySupplementalLicenses(supplementalInventory, supplementalDirectory)
 
         val fields = parseStrictManifest(Files.readAllBytes(manifest.toPath()))
         verifyFixedManifestFields(fields)
@@ -372,6 +387,46 @@ abstract class VerifyBundledNpmToolAsset : DefaultTask() {
 
     private fun hashFile(file: File): ByteIdentity = file.inputStream().use(::hashStream)
 
+    private fun verifySupplementalLicenses(inventory: File, directory: File) {
+        val inventoryIdentity = hashFile(inventory)
+        if (inventoryIdentity.bytes != EXPECTED_SUPPLEMENTAL_INVENTORY_BYTES ||
+            inventoryIdentity.sha256 != EXPECTED_SUPPLEMENTAL_INVENTORY_SHA256
+        ) {
+            throw GradleException(
+                "npm supplemental license inventory changed: " +
+                    "${inventoryIdentity.bytes}/${inventoryIdentity.sha256}",
+            )
+        }
+
+        val directoryPath = directory.toPath()
+        if (Files.isSymbolicLink(directoryPath) ||
+            !Files.isDirectory(directoryPath, LinkOption.NOFOLLOW_LINKS)
+        ) {
+            throw GradleException("npm supplemental license directory is missing or linked")
+        }
+        val children = Files.list(directoryPath).use { stream ->
+            stream.sorted().toList()
+        }
+        val observedNames = children.map { it.fileName.toString() }
+        if (observedNames != EXPECTED_SUPPLEMENTAL_LICENSES.keys.sorted()) {
+            throw GradleException(
+                "npm supplemental license file set changed: $observedNames",
+            )
+        }
+        children.forEach { path ->
+            val name = path.fileName.toString()
+            val expected = EXPECTED_SUPPLEMENTAL_LICENSES.getValue(name)
+            val file = requireRegularNoFollow(path.toFile(), "npm supplemental license $name")
+            val identity = hashFile(file)
+            if (identity.bytes != expected.bytes || identity.sha256 != expected.sha256) {
+                throw GradleException(
+                    "npm supplemental license changed for $name: " +
+                        "${identity.bytes}/${identity.sha256}",
+                )
+            }
+        }
+    }
+
     private fun hashStream(input: InputStream): ByteIdentity {
         val digest = MessageDigest.getInstance(SHA_256)
         var observed = 0L
@@ -439,7 +494,10 @@ abstract class VerifyBundledNpmToolAsset : DefaultTask() {
         private const val EXPECTED_FILE_COUNT = 2_133
         private const val EXPECTED_DIRECTORY_COUNT = 549
         private const val EXPECTED_TOTAL_FILE_BYTES = 11_785_613L
-        private const val EXPECTED_LICENSE_GAP_COUNT = 9L
+        private const val EXPECTED_LICENSE_GAP_COUNT = 0L
+        private const val EXPECTED_SUPPLEMENTAL_INVENTORY_BYTES = 9_307L
+        private const val EXPECTED_SUPPLEMENTAL_INVENTORY_SHA256 =
+            "6081c68a5fad9f801dafb1412cc42663150d83115997eeda3e2cdf1a29db59ab"
 
         private val MANIFEST_KEY_PATTERN = Regex("^[a-z][a-z0-9_]*$")
         private val DECIMAL_PATTERN = Regex("^(?:0|[1-9][0-9]*)$")
@@ -480,6 +538,54 @@ abstract class VerifyBundledNpmToolAsset : DefaultTask() {
                 "npm/LICENSE",
                 9_742,
                 "7610d223851f421d315df5e77974f1c68a04b97e02060e5bbbcf13d95e3ca257",
+            ),
+        )
+
+        private val EXPECTED_SUPPLEMENTAL_LICENSES = linkedMapOf(
+            "Apache-2.0-sigstore-verify-3.0.0.txt" to ExpectedArchiveEntry(
+                "Apache-2.0-sigstore-verify-3.0.0.txt",
+                11_351,
+                "364a130d2ca340bd56eb1e6d045fc6929bb0f9d0aa018f2c1949b29517e1cdd0",
+            ),
+            "CC-BY-3.0.txt" to ExpectedArchiveEntry(
+                "CC-BY-3.0.txt",
+                19_467,
+                "e6bc9e9c474700b708f568bac9e5a8a9bcb2b1dad53442f5ba449fcb848b8e76",
+            ),
+            "CC0-1.0.txt" to ExpectedArchiveEntry(
+                "CC0-1.0.txt",
+                7_048,
+                "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
+            ),
+            "ISC-isexe-3.1.1.txt" to ExpectedArchiveEntry(
+                "ISC-isexe-3.1.1.txt",
+                775,
+                "6dab8081cbcd304cfe3958576d6680cb33f49d39a5f43c53a1d0cf3666d29bd3",
+            ),
+            "ISC-npmcli-agent.txt" to ExpectedArchiveEntry(
+                "ISC-npmcli-agent.txt",
+                737,
+                "b89e3e25040333b6a432c5de8e40800225ae65cbda24bb7e9f423d49f2b8e958",
+            ),
+            "MIT-eastasianwidth-0.2.0.txt" to ExpectedArchiveEntry(
+                "MIT-eastasianwidth-0.2.0.txt",
+                1_067,
+                "ebd470d05030aee19ce6ccef1d70dce6f00f182e268a026294388e7e6b4b8bc0",
+            ),
+            "MIT-err-code-2.0.3.txt" to ExpectedArchiveEntry(
+                "MIT-err-code-2.0.3.txt",
+                1_064,
+                "5cfd203775f0b7ba0bd84e059d37b224c161497bf2a2d649a13fabce46c1c452",
+            ),
+            "MIT-imurmurhash-0.1.4.txt" to ExpectedArchiveEntry(
+                "MIT-imurmurhash-0.1.4.txt",
+                1_090,
+                "fa0943ddcaa857d901a9eb92254d89876297ecdfbc884d294a927df08ebcbbe8",
+            ),
+            "NOTICE-spdx-exceptions-2.5.0.txt" to ExpectedArchiveEntry(
+                "NOTICE-spdx-exceptions-2.5.0.txt",
+                788,
+                "a1ea6977d5204668dc1876c54c9397f38354ae1ddf69c33249dbfc131b3f3e45",
             ),
         )
 
@@ -648,6 +754,16 @@ val verifyBundledNpmToolAsset by tasks.registering(VerifyBundledNpmToolAsset::cl
     licenseInventoryFile.set(
         layout.projectDirectory.file(
             "src/main/assets/third_party/npm-11.6.2/PACKAGE-LICENSES.json",
+        ),
+    )
+    supplementalLicenseInventoryFile.set(
+        layout.projectDirectory.file(
+            "src/main/assets/third_party/npm-11.6.2/SUPPLEMENTAL-LICENSES.json",
+        ),
+    )
+    supplementalLicenseDirectory.set(
+        layout.projectDirectory.dir(
+            "src/main/assets/third_party/npm-11.6.2/supplemental",
         ),
     )
 }

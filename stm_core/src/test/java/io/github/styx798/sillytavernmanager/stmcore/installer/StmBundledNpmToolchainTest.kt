@@ -264,7 +264,7 @@ class StmBundledNpmToolchainTest {
             "third_party/npm-11.6.2/PACKAGE-LICENSES.json",
             first.licenseInventoryAsset,
         )
-        assertEquals(9, first.licenseGapCount)
+        assertEquals(0, first.licenseGapCount)
         assertTrue(first.npmDirectory.resolve("bin/npm-cli.js").isFile)
         assertTrue(staging.listFiles().orEmpty().isEmpty())
     }

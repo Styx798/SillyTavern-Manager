@@ -59,6 +59,9 @@ app/build/outputs/apk/debug/app-debug.apk
 
 ## 许可证
 
-除另有标注的第三方组件外，STM 自主源码采用 [MIT License](LICENSE)。
+Copyright (C) 2026 Styx798
 
-你可以自由使用、修改、分发和商用本项目；再分发时请保留版权声明和许可证正文。第三方组件继续适用各自的许可证与声明。
+除另有标注的第三方组件外，STM 自主源码采用
+[GNU Affero General Public License v3.0](LICENSE)（`AGPL-3.0-only`）。
+
+你可以依照该许可证使用、研究、修改和分发 STM。分发修改版本，或通过网络向用户提供修改版本的交互服务时，必须按照 AGPL v3 向相应用户提供对应源代码。第三方组件继续适用各自的许可证与声明。

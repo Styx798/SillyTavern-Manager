@@ -9,7 +9,9 @@ import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
+import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -37,6 +39,14 @@ abstract class VerifyDebugApkBundledNpmToolAsset : DefaultTask() {
 
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NONE)
+    abstract val sourceSupplementalLicenseInventoryFile: RegularFileProperty
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceSupplementalLicenseDirectory: DirectoryProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
     abstract val sourceNpmLicenseFile: RegularFileProperty
 
     @TaskAction
@@ -60,11 +70,49 @@ abstract class VerifyDebugApkBundledNpmToolAsset : DefaultTask() {
                 sourceLicenseInventoryFile.get().asFile,
                 "source npm license inventory asset",
             ),
+            APK_SUPPLEMENTAL_LICENSE_INVENTORY_PATH to requireRegularNoFollow(
+                sourceSupplementalLicenseInventoryFile.get().asFile,
+                "source npm supplemental license inventory asset",
+            ),
             APK_NPM_LICENSE_PATH to sourceNpmLicense,
         )
+        val supplementalDirectory = sourceSupplementalLicenseDirectory.get().asFile
+        val supplementalDirectoryPath = supplementalDirectory.toPath()
+        if (Files.isSymbolicLink(supplementalDirectoryPath) ||
+            !Files.isDirectory(supplementalDirectoryPath, LinkOption.NOFOLLOW_LINKS)
+        ) {
+            throw GradleException(
+                "source npm supplemental license directory is missing or linked: " +
+                    supplementalDirectory,
+            )
+        }
+        val supplementalSources = Files.list(supplementalDirectoryPath).use { stream ->
+            stream.sorted().toList()
+        }.associate { path ->
+            val name = path.fileName.toString()
+            "$APK_SUPPLEMENTAL_LICENSE_PREFIX$name" to requireRegularNoFollow(
+                path.toFile(),
+                "source npm supplemental license $name",
+            )
+        }
+        if (supplementalSources.isEmpty()) {
+            throw GradleException("source npm supplemental license directory is empty")
+        }
+        sources.putAll(supplementalSources)
 
         ZipFile(apk).use { zip ->
             val allEntries = Collections.list(zip.entries())
+            val observedSupplementalPaths = allEntries
+                .filter { !it.isDirectory && it.name.startsWith(APK_SUPPLEMENTAL_LICENSE_PREFIX) }
+                .map { it.name }
+                .sorted()
+            if (observedSupplementalPaths != supplementalSources.keys.sorted()) {
+                throw GradleException(
+                    "Debug APK supplemental npm license set differs from audited sources: " +
+                        "expected=${supplementalSources.keys.sorted()} " +
+                        "observed=$observedSupplementalPaths",
+                )
+            }
             sources.forEach { (apkPath, source) ->
                 val matches = allEntries.filter { it.name == apkPath }
                 if (matches.size != 1) {
@@ -164,6 +212,10 @@ abstract class VerifyDebugApkBundledNpmToolAsset : DefaultTask() {
             "assets/stm_core/tools/npm/11.6.2/npm-tool-manifest.stm"
         private const val APK_LICENSE_INVENTORY_PATH =
             "assets/third_party/npm-11.6.2/PACKAGE-LICENSES.json"
+        private const val APK_SUPPLEMENTAL_LICENSE_INVENTORY_PATH =
+            "assets/third_party/npm-11.6.2/SUPPLEMENTAL-LICENSES.json"
+        private const val APK_SUPPLEMENTAL_LICENSE_PREFIX =
+            "assets/third_party/npm-11.6.2/supplemental/"
         private const val APK_NPM_LICENSE_PATH =
             "assets/third_party/npm-11.6.2/LICENSE.txt"
         private const val NPM_LICENSE_PATH = "npm/LICENSE"
@@ -263,7 +315,7 @@ val verifyDebugApkBundledNpmToolAsset by tasks.registering(
 ) {
     group = "verification"
     description = "Verifies fixed npm assets and storage method in the assembled debug APK"
-    dependsOn("assembleDebug")
+    dependsOn(":stm_core:verifyBundledNpmToolAsset", "assembleDebug")
     apkFile.set(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
     sourceArchiveFile.set(
         stmCoreAssets.file("stm_core/tools/npm/11.6.2/npm-11.6.2.stmzip"),
@@ -273,6 +325,12 @@ val verifyDebugApkBundledNpmToolAsset by tasks.registering(
     )
     sourceLicenseInventoryFile.set(
         stmCoreAssets.file("third_party/npm-11.6.2/PACKAGE-LICENSES.json"),
+    )
+    sourceSupplementalLicenseInventoryFile.set(
+        stmCoreAssets.file("third_party/npm-11.6.2/SUPPLEMENTAL-LICENSES.json"),
+    )
+    sourceSupplementalLicenseDirectory.set(
+        stmCoreAssets.dir("third_party/npm-11.6.2/supplemental"),
     )
     sourceNpmLicenseFile.set(
         stmCoreAssets.file("third_party/npm-11.6.2/LICENSE.txt"),

@@ -11,7 +11,7 @@ internal object StmBundledNpmToolchainFactory {
         "stm_core/tools/npm/11.6.2/npm-tool-manifest.stm"
     const val MANIFEST_BYTES = 2_354L
     const val MANIFEST_SHA256 =
-        "93bd422b3313d3015ccbac14451581046cb25a3babdf7468fbe0868c4fe8cb42"
+        "c7c7396fba9b9d7990c59f65225018f029251395e27d8d422f7e4a7779e1c832"
 
     fun create(context: Context): StmBundledNpmToolchain {
         val applicationContext = context.applicationContext
