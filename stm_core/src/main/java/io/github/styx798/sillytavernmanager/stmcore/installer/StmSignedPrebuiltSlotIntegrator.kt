@@ -11,6 +11,7 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Locale
+import org.json.JSONObject
 
 internal data class StmSignedPrebuiltIntegrationResult(
     val manifest: StmDependencySupplyManifest,
@@ -227,11 +228,20 @@ internal class StmSignedPrebuiltSlotIntegrator(
             manifest.sbomSha256,
             MAX_SIDECAR_BYTES,
         )
+        val licenseManifest = supply.resolve(LICENSE_MANIFEST_FILE)
         requirePayload(
-            supply.resolve(LICENSE_MANIFEST_FILE),
+            licenseManifest,
             manifest.licenseManifestBytes,
             manifest.licenseManifestSha256,
             MAX_SIDECAR_BYTES,
+        )
+        verifyThirdPartyLicenseArchive(
+            supply = supply,
+            manifest = manifest,
+            licenseManifestBytes = readBoundedRegularFile(
+                licenseManifest,
+                MAX_SIDECAR_BYTES,
+            ),
         )
         requirePayload(
             supply.resolve(BUNDLE_FILE),
@@ -256,6 +266,79 @@ internal class StmSignedPrebuiltSlotIntegrator(
             Files.size(supply.resolve(PRUNE_POLICY_FILE)),
             manifest.prunePolicySha256,
             MAX_SOURCE_FILE_BYTES,
+        )
+    }
+
+    private fun verifyThirdPartyLicenseArchive(
+        supply: Path,
+        manifest: StmDependencySupplyManifest,
+        licenseManifestBytes: ByteArray,
+    ) {
+        val inventory = try {
+            JSONObject(licenseManifestBytes.toString(StandardCharsets.UTF_8))
+        } catch (error: Exception) {
+            throw IllegalStateException("Signed third-party license inventory is invalid", error)
+        }
+        check(inventory.getInt("schemaVersion") == LICENSE_INVENTORY_SCHEMA_VERSION) {
+            "Signed third-party license inventory schema is unsupported"
+        }
+        val artifact = inventory.getJSONObject("artifact")
+        check(
+            artifact.getString("repository") == manifest.repository &&
+                artifact.getString("stCommit") == manifest.stCommitSha &&
+                artifact.getString("packageLockSha256") == manifest.packageLockSha256
+        ) {
+            "Signed third-party license inventory does not bind this dependency supply"
+        }
+        val counts = inventory.getJSONObject("counts")
+        val packageInstances = counts.getInt("packageInstances")
+        check(
+            packageInstances > 0 &&
+                counts.getInt("unresolvedPackageInstances") == 0 &&
+                inventory.getJSONArray("packages").length() == packageInstances
+        ) {
+            "Signed third-party license inventory is incomplete"
+        }
+        val stmLicense = inventory.getJSONObject("stmProjectLicense")
+        val stmLicenseName = stmLicense.getString("file")
+        val stmLicenseBytes = stmLicense.getLong("bytes")
+        val stmLicenseSha256 = stmLicense.getString("sha256")
+        check(
+            stmLicenseName == STM_LICENSE_FILE &&
+                stmLicense.getString("spdx") == STM_LICENSE_SPDX &&
+                stmLicenseBytes in 1..MAX_LICENSE_TEXT_BYTES &&
+                stmLicenseSha256.matches(LOWERCASE_SHA256_PATTERN)
+        ) {
+            "Signed STM project license identity is invalid"
+        }
+        requirePayload(
+            supply.resolve(stmLicenseName),
+            stmLicenseBytes,
+            stmLicenseSha256,
+            MAX_LICENSE_TEXT_BYTES,
+        )
+        val archive = inventory.getJSONObject("archive")
+        val archiveName = archive.getString("file")
+        val archiveRoot = archive.getString("root")
+        val archiveBytes = archive.getLong("bytes")
+        val archiveSha256 = archive.getString("sha256")
+        check(
+            archiveName == THIRD_PARTY_LICENSE_ARCHIVE_FILE &&
+                archiveRoot == THIRD_PARTY_LICENSE_ARCHIVE_ROOT &&
+                archiveBytes in 1..MAX_LICENSE_ARCHIVE_BYTES &&
+                archiveSha256.matches(LOWERCASE_SHA256_PATTERN) &&
+                archive.getInt("fileCount") > 0 &&
+                archive.getInt("directoryCount") > 0 &&
+                archive.getLong("totalFileBytes") > 0 &&
+                archive.getString("treeSha256").matches(LOWERCASE_SHA256_PATTERN)
+        ) {
+            "Signed third-party license archive identity is invalid"
+        }
+        requirePayload(
+            supply.resolve(archiveName),
+            archiveBytes,
+            archiveSha256,
+            MAX_LICENSE_ARCHIVE_BYTES,
         )
     }
 
@@ -528,6 +611,9 @@ internal class StmSignedPrebuiltSlotIntegrator(
         const val TREE_MANIFEST_FILE = StmRuntimeSlotAdmissionEvidence.TREE_MANIFEST_FILE
         const val SBOM_FILE = StmRuntimeSlotAdmissionEvidence.SBOM_FILE
         const val LICENSE_MANIFEST_FILE = StmRuntimeSlotAdmissionEvidence.LICENSE_MANIFEST_FILE
+        const val THIRD_PARTY_LICENSE_ARCHIVE_FILE =
+            StmRuntimeSlotAdmissionEvidence.THIRD_PARTY_LICENSE_ARCHIVE_FILE
+        const val STM_LICENSE_FILE = StmRuntimeSlotAdmissionEvidence.STM_LICENSE_FILE
         const val BUNDLE_FILE = StmRuntimeSlotAdmissionEvidence.BUNDLE_FILE
         const val BUNDLE_LICENSE_FILE = StmRuntimeSlotAdmissionEvidence.BUNDLE_LICENSE_FILE
         const val ADAPTER_FILE = StmRuntimeSlotAdmissionEvidence.ADAPTER_FILE
@@ -540,15 +626,21 @@ internal class StmSignedPrebuiltSlotIntegrator(
         const val MAX_ARCHIVE_BYTES = 512L * 1024L * 1024L
         const val MAX_TREE_MANIFEST_BYTES = 16L * 1024L * 1024L
         const val MAX_SIDECAR_BYTES = 64L * 1024L * 1024L
+        const val MAX_LICENSE_ARCHIVE_BYTES = 64L * 1024L * 1024L
+        const val MAX_LICENSE_TEXT_BYTES = 128L * 1024L
         const val MAX_BUNDLE_BYTES = 16L * 1024L * 1024L
         const val MAX_SOURCE_FILE_BYTES = 16L * 1024L * 1024L
         const val COPY_BUFFER_SIZE = 64 * 1024
         const val SHA256 = "SHA-256"
+        const val LICENSE_INVENTORY_SCHEMA_VERSION = 2
+        const val THIRD_PARTY_LICENSE_ARCHIVE_ROOT = "third_party_licenses"
+        const val STM_LICENSE_SPDX = "AGPL-3.0-only"
 
         val RUNTIME_SUPPLY_FILES =
             StmRuntimeSlotAdmissionEvidence.REQUIRED_RUNTIME_FILES
         val EXPECTED_SUPPLY_FILES = (
             RUNTIME_SUPPLY_FILES + DEPENDENCIES_ARCHIVE_FILE
             ).sorted()
+        val LOWERCASE_SHA256_PATTERN = Regex("^[0-9a-f]{64}$")
     }
 }

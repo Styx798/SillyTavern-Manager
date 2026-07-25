@@ -107,6 +107,8 @@ internal data class StmRuntimeSlotAdmissionEvidence(
         const val TREE_MANIFEST_FILE = "tree-manifest.tsv"
         const val SBOM_FILE = "sbom.cdx.json"
         const val LICENSE_MANIFEST_FILE = "licenses.json"
+        const val THIRD_PARTY_LICENSE_ARCHIVE_FILE = "third-party-licenses.zip"
+        const val STM_LICENSE_FILE = "stm-license.txt"
         const val BUNDLE_FILE = "lib.js"
         const val BUNDLE_LICENSE_FILE = "lib.js.LICENSE.txt"
         const val ADAPTER_FILE = "webpack-serve.adapter.js"
@@ -122,6 +124,8 @@ internal data class StmRuntimeSlotAdmissionEvidence(
             PRUNE_POLICY_FILE,
             SBOM_FILE,
             SIGNATURE_FILE,
+            STM_LICENSE_FILE,
+            THIRD_PARTY_LICENSE_ARCHIVE_FILE,
             TREE_MANIFEST_FILE,
         )
 
