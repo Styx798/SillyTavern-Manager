@@ -52,7 +52,7 @@
     <string name="action_start">启动</string>
     <string name="action_stop">停止</string>
     <string name="action_open_st">进入 ST</string>
-    <string name="action_unavailable_hint">安装或激活一个可运行的 ST 版本，再启动 Core 即可进入 App 内 ST。Core 安装会完成依赖初始化、本地 bundle 构筑、可运行验收和 READY Slot 原子提交。</string>
+    <string name="action_unavailable_hint">安装或激活一个可运行的 ST 版本，再启动 Core 即可进入 App 内 ST。Core 优先使用匹配的签名运行层，仅在没有可用预构筑层时回退到一次性本机构筑。</string>
 
     <string name="build_status_title">阶段 1 能力</string>
     <string name="build_status_body">STM Core 0.1 已通过内部 Feather Engine 提供独立进程 Android Node.js 宿主。</string>
@@ -97,9 +97,9 @@
     <string name="st_download_zip_hint">早期 ZIP 格式提示</string>
     <string name="st_download_zip_hint_present">存在 PK 文件头；这不等于完整 ZIP 验证。</string>
     <string name="st_download_zip_hint_missing">缺少 PK 文件头，归档格式未识别。</string>
-    <string name="st_downloaded_not_installed_note">下载归档在选择“使用 Core 安装”前仍只是外部缓存。Core 会在私有 staging 中完成依赖初始化、本地 bundle 构筑和可运行验收，全部成功后才原子提交 READY Slot。删除下载缓存不会删除 Core Slot 或用户数据。</string>
+    <string name="st_downloaded_not_installed_note">下载归档在选择“使用 Core 安装”前仍只是外部缓存。Core 会在私有 staging 中完成全部工作：优先使用匹配的签名运行层，仅在没有可用预构筑层时回退到一次性本机构筑；通过可运行验收后才原子提交 READY Slot。删除下载缓存不会删除 Core Slot 或用户数据。</string>
     <string name="st_download_core_install">使用 Core 安装</string>
-    <string name="st_download_core_install_note">该过程可能持续数分钟。Core 使用 APK 内置 npm 工具，在本机一次性生成 lib.js，启动并停止 staging 中的 SillyTavern 完成验收，最后原子提交 READY Slot。</string>
+    <string name="st_download_core_install_note">Core 会先获取与当前 ST 版本精确匹配的签名运行层；没有可用预构筑层时，才使用 APK 内置 npm 工具在本机一次性构筑。两条路径都会先完成 staging 可运行验收，再原子提交 READY Slot。</string>
     <string name="st_download_core_preflight">发送到 Core 预检</string>
     <string name="st_download_core_preflight_note">预检只会重新计算哈希、安全解压并检查精确源码，不安装依赖，也不会创建 READY Slot。</string>
     <string name="st_download_delete_all">删除全部下载</string>

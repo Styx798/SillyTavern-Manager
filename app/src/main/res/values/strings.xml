@@ -52,7 +52,7 @@
     <string name="action_start">Start</string>
     <string name="action_stop">Stop</string>
     <string name="action_open_st">Open ST</string>
-    <string name="action_unavailable_hint">Install or activate a runnable ST version, then start Core to open ST in the app. Core installation performs dependency setup, local bundle construction, runnable acceptance, and atomic READY-slot admission.</string>
+    <string name="action_unavailable_hint">Install or activate a runnable ST version, then start Core to open ST in the app. Core prefers a matching signed runtime layer and falls back to one-time local construction only when no usable prebuilt layer is available.</string>
 
     <string name="build_status_title">Stage 1 capabilities</string>
     <string name="build_status_body">STM Core 0.1 provides an isolated Android Node.js host through its internal Feather Engine.</string>
@@ -97,9 +97,9 @@
     <string name="st_download_zip_hint">Early ZIP format hint</string>
     <string name="st_download_zip_hint_present">PK header present; this is not full ZIP validation.</string>
     <string name="st_download_zip_hint_missing">PK header missing; archive format is unidentified.</string>
-    <string name="st_downloaded_not_installed_note">Downloaded archives remain external cache entries until you choose Install. Core performs all installation work in private staging and commits a READY slot only after dependency setup, local bundle construction and runnable acceptance. Deleting cache does not delete Core slots or user data.</string>
+    <string name="st_downloaded_not_installed_note">Downloaded archives remain external cache entries until you choose Install. Core performs all work in private staging, preferring a matching signed runtime layer and using one-time local construction only as a fallback. A READY slot is committed only after runnable acceptance. Deleting cache does not delete Core slots or user data.</string>
     <string name="st_download_core_install">Install with Core</string>
-    <string name="st_download_core_install_note">This can take several minutes. Core uses its bundled npm tool, builds lib.js once on this device, starts and stops the staged SillyTavern for acceptance, then atomically commits the READY slot.</string>
+    <string name="st_download_core_install_note">Core first tries a signed runtime layer that exactly matches this ST version. If no usable prebuilt layer is available, it uses its bundled npm tool to build locally. Both paths run staged acceptance before atomically committing the READY slot.</string>
     <string name="st_download_core_preflight">Send to Core preflight</string>
     <string name="st_download_core_preflight_note">Preflight only re-hashes, safely extracts and inspects the exact source. It does not install dependencies or create a READY slot.</string>
     <string name="st_download_delete_all">Delete all downloads</string>
