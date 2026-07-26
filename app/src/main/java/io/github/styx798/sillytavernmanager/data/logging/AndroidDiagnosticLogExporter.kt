@@ -9,6 +9,7 @@ import io.github.styx798.sillytavernmanager.core.logging.DiagnosticLogExporter
 import io.github.styx798.sillytavernmanager.core.logging.LogEntry
 import io.github.styx798.sillytavernmanager.core.logging.StmDiagnosticEnvironment
 import io.github.styx798.sillytavernmanager.core.logging.StmDiagnosticReportFormatter
+import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreConnectionState
 import io.github.styx798.sillytavernmanager.stmcore.StmCorePaths
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreState
 import java.io.RandomAccessFile
@@ -25,6 +26,7 @@ class AndroidDiagnosticLogExporter(
     override suspend fun export(
         destination: android.net.Uri,
         coreState: StmCoreState,
+        coreConnectionState: StmCoreConnectionState,
         entries: List<LogEntry>,
     ): DiagnosticLogExportResult = runCatching {
         val runtimeLog = readRuntimeLogTail()
@@ -32,6 +34,7 @@ class AndroidDiagnosticLogExporter(
             generatedAtEpochMs = clock(),
             environment = readEnvironment(),
             coreState = coreState,
+            coreConnectionState = coreConnectionState,
             entries = entries,
             runtimeLogTail = runtimeLog?.text,
             runtimeLogTruncated = runtimeLog?.truncated == true,

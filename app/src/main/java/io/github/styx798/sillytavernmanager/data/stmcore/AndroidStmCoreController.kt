@@ -64,7 +64,7 @@ class AndroidStmCoreController(context: Context) :
         detachedAfterTaskRemoval = false
         closedByUser = false
         restartRequested = false
-        snapshotEpoch.disconnect()
+        snapshotEpoch.resumeAppTask()
         mutableConnectionState.value = StmCoreConnectionState.CONNECTING
         if (!client.connect()) {
             mutableConnectionState.value = StmCoreConnectionState.DISCONNECTED

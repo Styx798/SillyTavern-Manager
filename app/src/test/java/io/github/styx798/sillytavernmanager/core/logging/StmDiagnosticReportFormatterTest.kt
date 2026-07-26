@@ -4,6 +4,7 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreActiveSlot
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreError
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreRunState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreState
+import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreConnectionState
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,6 +24,7 @@ class StmDiagnosticReportFormatterTest {
                 webViewPackage = "com.google.android.webview",
                 webViewVersion = "149.0",
             ),
+            coreConnectionState = StmCoreConnectionState.CONNECTING,
             coreState = StmCoreState(
                 revision = 12,
                 updatedAtEpochMs = 1_700_000_000_000,
@@ -54,6 +56,9 @@ class StmDiagnosticReportFormatterTest {
 
         assertTrue(report.contains("Android: 15 (API 35)"))
         assertTrue(report.contains("WebView: com.google.android.webview 149.0"))
+        assertTrue(report.contains("Connection state: CONNECTING"))
+        assertTrue(report.contains("Process identity: test"))
+        assertTrue(report.contains("Snapshot updated UTC:"))
         assertTrue(report.contains("runtime/TEST_FAILURE: Synthetic failure"))
         assertTrue(report.contains("Active slot: slot-a"))
         assertTrue(report.contains("APP/ERROR: Export me Authorization: [REDACTED]"))
