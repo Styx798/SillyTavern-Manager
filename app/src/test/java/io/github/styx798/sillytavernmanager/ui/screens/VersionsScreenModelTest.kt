@@ -1,15 +1,35 @@
 package io.github.styx798.sillytavernmanager.ui.screens
 
+import io.github.styx798.sillytavernmanager.core.downloads.StDownloadChannel
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifact
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactIntegrity
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactKind
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactTrust
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlot
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlotState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VersionsScreenModelTest {
+    @Test
+    fun `stable uses signed runtime without local build confirmation`() {
+        val policy = StDownloadChannel.STABLE.installPolicy()
+
+        assertEquals(StmCoreInstallMode.FAST_SIGNED_RUNTIME, policy.mode)
+        assertFalse(policy.requiresUserConfirmation)
+    }
+
+    @Test
+    fun `preview requires confirmation before local npm build`() {
+        val policy = StDownloadChannel.PREVIEW.installPolicy()
+
+        assertEquals(StmCoreInstallMode.LOCAL_NPM_BUILD, policy.mode)
+        assertTrue(policy.requiresUserConfirmation)
+    }
+
     @Test
     fun `ST manager hides synthetic Gate 2 fixtures but keeps real and legacy slots`() {
         val synthetic = slot(

@@ -1,8 +1,11 @@
 package io.github.styx798.sillytavernmanager
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -69,6 +72,20 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     settings = settings,
                     onThemeModeSelected = viewModel::setThemeMode,
+                    startInTavern = BuildConfig.DEBUG &&
+                        intent.getBooleanExtra(DEBUG_EXTRA_START_IN_TAVERN, false),
+                    startInVersions = BuildConfig.DEBUG &&
+                        intent.getBooleanExtra(DEBUG_EXTRA_START_IN_VERSIONS, false),
+                    startInSettings = BuildConfig.DEBUG &&
+                        intent.getBooleanExtra(DEBUG_EXTRA_START_IN_SETTINGS, false),
+                    onOpenCompleteRemoval = {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", packageName, null),
+                            ),
+                        )
+                    },
                     onLanguageSelected = { language ->
                         if (language != settings.language) {
                             viewModel.setLanguage(language)
@@ -84,4 +101,14 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         (application as StmApplication).container.stmCoreController.resumeAppTask()
     }
+
 }
+
+internal const val DEBUG_EXTRA_START_IN_TAVERN =
+    "io.github.styx798.sillytavernmanager.debug.START_IN_TAVERN"
+
+internal const val DEBUG_EXTRA_START_IN_VERSIONS =
+    "io.github.styx798.sillytavernmanager.debug.START_IN_VERSIONS"
+
+internal const val DEBUG_EXTRA_START_IN_SETTINGS =
+    "io.github.styx798.sillytavernmanager.debug.START_IN_SETTINGS"

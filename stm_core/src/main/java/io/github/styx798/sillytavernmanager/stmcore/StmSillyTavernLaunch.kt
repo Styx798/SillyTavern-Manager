@@ -31,6 +31,7 @@ internal object StmSillyTavernLaunchFactory {
         sessionDirectory: File,
         logsRoot: File,
         expectedVersion: String,
+        webSessionCredential: StmCoreWebSessionCredential,
     ): StmSillyTavernPreparedLaunch {
         require(expectedVersion.isNotBlank()) { "A real SillyTavern launch requires a version" }
         require(archiveRoot.isNotBlank()) { "A real SillyTavern launch requires an archive root" }
@@ -85,6 +86,7 @@ internal object StmSillyTavernLaunchFactory {
                 prebuiltBundle = prebuiltBundle,
                 selectedPort = selectedPort,
                 expectedVersion = expectedVersion,
+                webSessionCredential = webSessionCredential,
             ),
             selectedPort = selectedPort,
             programRoot = program.toFile(),
@@ -105,6 +107,7 @@ internal object StmSillyTavernLaunchFactory {
         prebuiltBundle: Path,
         selectedPort: Int,
         expectedVersion: String,
+        webSessionCredential: StmCoreWebSessionCredential,
     ): FeatherEngineLaunchSpec {
         val bootstrap =
             """
@@ -133,6 +136,7 @@ internal object StmSillyTavernLaunchFactory {
                 error: '',
                 requestCount: 0,
                 lastRequest: '',
+                rejectedRequestCount: 0,
                 importSettled: false,
                 forbiddenModuleLoads: 0,
                 logs: [],
@@ -199,6 +203,48 @@ internal object StmSillyTavernLaunchFactory {
               if (!fs.statSync(bundlePath).isFile()) {
                 throw new Error('Signed prebuilt lib.js is not a regular file');
               }
+              const webSessionCookieName = ${jsString(STM_CORE_WEB_SESSION_COOKIE_NAME)};
+              const webSessionCredential =
+                ${jsString(webSessionCredential.value)};
+              const expectedHost = ${jsString("127.0.0.1:$selectedPort")};
+              const expectedOrigin = ${jsString("http://127.0.0.1:$selectedPort")};
+              const expectedCredentialBytes = Buffer.from(webSessionCredential, 'ascii');
+              const requestIsAuthorized = request => {
+                if (String(request.headers.host || '') !== expectedHost) return false;
+                const origin = request.headers.origin;
+                if (origin !== undefined && String(origin) !== expectedOrigin) return false;
+                const matches = String(request.headers.cookie || '')
+                  .split(';')
+                  .map(part => part.trim())
+                  .filter(part => part.startsWith(webSessionCookieName + '='));
+                if (matches.length !== 1) return false;
+                const supplied = matches[0].slice(webSessionCookieName.length + 1);
+                const suppliedBytes = Buffer.from(supplied, 'ascii');
+                return suppliedBytes.length === expectedCredentialBytes.length &&
+                  crypto.timingSafeEqual(suppliedBytes, expectedCredentialBytes);
+              };
+              const rejectHttpRequest = response => {
+                state.rejectedRequestCount += 1;
+                response.writeHead(403, {
+                  'Cache-Control': 'no-store',
+                  'Connection': 'close',
+                  'Content-Length': '0',
+                });
+                response.end();
+              };
+              const rejectUpgrade = socket => {
+                state.rejectedRequestCount += 1;
+                try {
+                  socket.end(
+                    'HTTP/1.1 403 Forbidden\r\n' +
+                    'Cache-Control: no-store\r\n' +
+                    'Connection: close\r\n' +
+                    'Content-Length: 0\r\n\r\n'
+                  );
+                } finally {
+                  socket.destroy();
+                }
+              };
               const webpackConfigUrl = pathToFileURL(
                 fs.realpathSync(${jsString(programRoot.resolve(WEBPACK_CONFIG_FILE).toString())})
               ).href;
@@ -216,7 +262,70 @@ internal object StmSillyTavernLaunchFactory {
               });
 
               http.createServer = function(...args) {
+                const listenerIndex = args.length - 1;
+                if (listenerIndex >= 0 && typeof args[listenerIndex] === 'function') {
+                  const requestListener = args[listenerIndex];
+                  args[listenerIndex] = function(request, response) {
+                    if (!requestIsAuthorized(request)) {
+                      rejectHttpRequest(response);
+                      return;
+                    }
+                    return Reflect.apply(requestListener, this, arguments);
+                  };
+                }
                 const server = state.originalCreateServer.apply(this, args);
+                const upgradeWrappers = new WeakMap();
+                const secureUpgradeListener = listener => {
+                  let wrapped = upgradeWrappers.get(listener);
+                  if (wrapped) return wrapped;
+                  wrapped = function(request, socket) {
+                    if (!requestIsAuthorized(request)) {
+                      rejectUpgrade(socket);
+                      return;
+                    }
+                    return Reflect.apply(listener, this, arguments);
+                  };
+                  upgradeWrappers.set(listener, wrapped);
+                  return wrapped;
+                };
+                const originalOn = server.on;
+                const originalAddListener = server.addListener;
+                const originalOnce = server.once;
+                const originalPrependListener = server.prependListener;
+                const originalPrependOnceListener = server.prependOnceListener;
+                const originalRemoveListener = server.removeListener;
+                const originalOff = server.off;
+                const secured = (event, listener) =>
+                  event === 'upgrade' ? secureUpgradeListener(listener) : listener;
+                server.on = function(event, listener) {
+                  return originalOn.call(this, event, secured(event, listener));
+                };
+                server.addListener = function(event, listener) {
+                  return originalAddListener.call(this, event, secured(event, listener));
+                };
+                server.once = function(event, listener) {
+                  return originalOnce.call(this, event, secured(event, listener));
+                };
+                server.prependListener = function(event, listener) {
+                  return originalPrependListener.call(this, event, secured(event, listener));
+                };
+                server.prependOnceListener = function(event, listener) {
+                  return originalPrependOnceListener.call(this, event, secured(event, listener));
+                };
+                server.removeListener = function(event, listener) {
+                  return originalRemoveListener.call(
+                    this,
+                    event,
+                    event === 'upgrade' ? (upgradeWrappers.get(listener) || listener) : listener,
+                  );
+                };
+                server.off = function(event, listener) {
+                  return originalOff.call(
+                    this,
+                    event,
+                    event === 'upgrade' ? (upgradeWrappers.get(listener) || listener) : listener,
+                  );
+                };
                 state.servers.push(server);
                 state.server = server;
                 server.on('request', request => {
@@ -331,6 +440,7 @@ internal object StmSillyTavernLaunchFactory {
                   const state = globalThis.__stmCore;
                   return 'requests=' + String(state?.requestCount || 0) +
                     ', last=' + String(state?.lastRequest || '') +
+                    ', rejectedRequests=' + String(state?.rejectedRequestCount || 0) +
                     ', importSettled=' + String(state?.importSettled || false) +
                     ', forbiddenModuleLoads=' + String(state?.forbiddenModuleLoads || 0) +
                     ', error=' + String(state?.error || '') +
@@ -338,7 +448,10 @@ internal object StmSillyTavernLaunchFactory {
                 })();
                 """.trimIndent(),
             cleanupScript = cleanupScript,
-            readinessProbe = StmSillyTavernVersionProbe(expectedVersion)::execute,
+            readinessProbe = StmSillyTavernVersionProbe(
+                expectedVersion = expectedVersion,
+                webSessionCredential = webSessionCredential,
+            )::execute,
         )
     }
 
@@ -457,9 +570,17 @@ internal object StmSillyTavernLaunchFactory {
 
 private class StmSillyTavernVersionProbe(
     private val expectedVersion: String,
+    private val webSessionCredential: StmCoreWebSessionCredential,
 ) {
     fun execute(baseUrl: String): LoopbackProbeResult {
-        val response = when (val result = LoopbackHealthProbe.capture(baseUrl, "/version")) {
+        val response = when (
+            val result = LoopbackHealthProbe.capture(
+                baseUrl = baseUrl,
+                path = "/version",
+                cookie = "$STM_CORE_WEB_SESSION_COOKIE_NAME=" +
+                    webSessionCredential.value,
+            )
+        ) {
             is LoopbackProbeResult.Failed -> return result
             is LoopbackProbeResult.Healthy -> result.response
         }

@@ -199,6 +199,7 @@ private object StmCoreStateBundleCodec {
     private const val PROCESS_ID = "process_id"
     private const val INSTALLER_RECOVERY_COMPLETE = "installer_recovery_complete"
     private const val SESSION_ID = "session_id"
+    private const val WEB_SESSION_CREDENTIAL = "web_session_credential"
     private const val RUN_STATE = "run_state"
     private const val WORKLOAD = "workload"
     private const val LOCAL_BASE_URL = "local_base_url"
@@ -226,6 +227,7 @@ private object StmCoreStateBundleCodec {
         putInt(PROCESS_ID, requireNotNull(state.processId))
         putBoolean(INSTALLER_RECOVERY_COMPLETE, state.installerRecoveryComplete)
         putString(SESSION_ID, state.sessionId)
+        putString(WEB_SESSION_CREDENTIAL, state.webSessionCredential?.value)
         putString(RUN_STATE, state.runState.name)
         putString(WORKLOAD, state.workload.name)
         putString(LOCAL_BASE_URL, state.localBaseUrl)
@@ -255,6 +257,8 @@ private object StmCoreStateBundleCodec {
             processId = bundle.getInt(PROCESS_ID).takeIf { it > 0 },
             installerRecoveryComplete = bundle.getBoolean(INSTALLER_RECOVERY_COMPLETE),
             sessionId = bundle.getString(SESSION_ID),
+            webSessionCredential = bundle.getString(WEB_SESSION_CREDENTIAL)
+                ?.let(StmCoreWebSessionCredential::fromProtocol),
             runState = StmCoreRunState.valueOf(requireNotNull(bundle.getString(RUN_STATE))),
             workload = StmCoreWorkload.valueOf(requireNotNull(bundle.getString(WORKLOAD))),
             localBaseUrl = bundle.getString(LOCAL_BASE_URL),

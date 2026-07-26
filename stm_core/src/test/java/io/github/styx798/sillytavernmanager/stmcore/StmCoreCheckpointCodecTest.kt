@@ -66,6 +66,32 @@ class StmCoreCheckpointCodecTest {
     }
 
     @Test
+    fun `Web session credential never survives a checkpoint reload`() {
+        val artifact = verifiedSourceArtifact()
+        val slot = readySlot().copy(
+            repository = artifact.repository,
+            commitSha = artifact.commitSha,
+            artifact = artifact,
+        )
+        val pointer = StmCoreActiveSlot(slot.id, slot.revision, activeRevision = 1)
+        val state = validState().copy(
+            sessionId = "session-1",
+            webSessionCredential = StmCoreWebSessionCredential.generate(),
+            runState = StmCoreRunState.STARTING,
+            workload = StmCoreWorkload.SILLY_TAVERN,
+            slots = listOf(slot),
+            activeSlot = pointer,
+            runningSlot = pointer,
+        ).requireValidCoreSnapshot()
+
+        val decoded = StmCoreCheckpointCodec.decode(StmCoreCheckpointCodec.encode(state))
+
+        assertNull(decoded.webSessionCredential)
+        assertEquals(StmCoreRunState.STARTING, decoded.runState)
+        assertEquals("session-1", decoded.sessionId)
+    }
+
+    @Test
     fun `v2 successful verification without artifact receipt fails closed`() {
         val operationId = UUID.randomUUID().toString()
 

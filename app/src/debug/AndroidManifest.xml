@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name=".debug.DebugUiProcessTerminationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action
+                    android:name="io.github.styx798.sillytavernmanager.debug.TERMINATE_UI_PROCESS" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

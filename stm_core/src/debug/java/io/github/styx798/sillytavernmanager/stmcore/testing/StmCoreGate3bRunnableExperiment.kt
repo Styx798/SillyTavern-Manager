@@ -8,6 +8,8 @@ import com.caoccao.javet.enums.V8RuntimeTerminationMode
 import com.caoccao.javet.interop.NodeRuntime
 import io.github.styx798.sillytavernmanager.stmcore.FeatherEngine
 import io.github.styx798.sillytavernmanager.stmcore.FeatherEngineLaunchSpec
+import io.github.styx798.sillytavernmanager.stmcore.STM_CORE_WEB_SESSION_COOKIE_NAME
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWebSessionCredential
 import io.github.styx798.sillytavernmanager.stmcore.StmNodeRuntimeFactory
 import io.github.styx798.sillytavernmanager.stmcore.StmSillyTavernLaunchFactory
 import io.github.styx798.sillytavernmanager.stmcore.installer.ArtifactIdentity
@@ -1639,6 +1641,7 @@ internal class StmCoreGate3bRunnableAcceptance(
         val dataRoot = File(experimentRoot, "runnable-data")
         val sessionRoot = File(experimentRoot, "runnable-session")
         val logsRoot = File(experimentRoot, "runnable-logs")
+        val webSessionCredential = StmCoreWebSessionCredential.generate()
         val prepared = StmSillyTavernLaunchFactory.prepare(
             slotRoot = source.payloadRoot,
             archiveRoot = source.archiveRoot,
@@ -1646,6 +1649,7 @@ internal class StmCoreGate3bRunnableAcceptance(
             sessionDirectory = sessionRoot,
             logsRoot = logsRoot,
             expectedVersion = ST_VERSION,
+            webSessionCredential = webSessionCredential,
         )
         teardownSelectedPort = prepared.selectedPort
         check(!cancelled.get()) { "Stage 3B runnable acceptance was cancelled" }
@@ -1691,7 +1695,7 @@ internal class StmCoreGate3bRunnableAcceptance(
             }
             startMillis = SystemClock.elapsedRealtime() - startAt
             val baseUrl = "http://127.0.0.1:$actualPort"
-            val version = httpGet("$baseUrl/version")
+            val version = httpGet("$baseUrl/version", webSessionCredential)
             check(
                 version.code == 200 &&
                     JSONObject(version.body.toString(Charsets.UTF_8)).getString("pkgVersion") == ST_VERSION,
@@ -1699,7 +1703,7 @@ internal class StmCoreGate3bRunnableAcceptance(
                 "Candidate SillyTavern /version acceptance failed"
             }
             versionEvidence = "200:${version.body.size}:$ST_VERSION"
-            val home = httpGet("$baseUrl/")
+            val home = httpGet("$baseUrl/", webSessionCredential)
             check(
                 home.code == 200 &&
                     home.body.toString(Charsets.UTF_8).contains("<title>SillyTavern</title>"),
@@ -1707,7 +1711,7 @@ internal class StmCoreGate3bRunnableAcceptance(
                 "Candidate SillyTavern homepage acceptance failed"
             }
             homeEvidence = "200:${home.body.size}"
-            val bundle = httpGet("$baseUrl/lib.js")
+            val bundle = httpGet("$baseUrl/lib.js", webSessionCredential)
             val bundleSha256 = sha256(bundle.body)
             check(
                 bundle.code == 200 &&
@@ -1943,12 +1947,19 @@ internal class StmCoreGate3bRunnableAcceptance(
         return source
     }
 
-    private fun httpGet(url: String): Gate3bRunnableHttpEvidence {
+    private fun httpGet(
+        url: String,
+        webSessionCredential: StmCoreWebSessionCredential,
+    ): Gate3bRunnableHttpEvidence {
         val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
         return try {
             connection.connectTimeout = HTTP_TIMEOUT_MILLIS
             connection.readTimeout = HTTP_TIMEOUT_MILLIS
             connection.requestMethod = "GET"
+            connection.setRequestProperty(
+                "Cookie",
+                "$STM_CORE_WEB_SESSION_COOKIE_NAME=${webSessionCredential.value}",
+            )
             val code = connection.responseCode
             val source = if (code in 200..399) connection.inputStream else connection.errorStream
             Gate3bRunnableHttpEvidence(code, source?.use { it.readBytes() } ?: ByteArray(0))

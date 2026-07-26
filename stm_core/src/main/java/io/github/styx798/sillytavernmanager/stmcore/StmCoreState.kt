@@ -1,6 +1,42 @@
 package io.github.styx798.sillytavernmanager.stmcore
 
-const val STM_CORE_PROTOCOL_VERSION = 4
+import java.security.SecureRandom
+
+const val STM_CORE_PROTOCOL_VERSION = 5
+const val STM_CORE_WEB_SESSION_COOKIE_NAME = "stm_core_session"
+
+class StmCoreWebSessionCredential private constructor(
+    val value: String,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is StmCoreWebSessionCredential && value == other.value
+
+    override fun hashCode(): Int = value.hashCode()
+
+    override fun toString(): String = "StmCoreWebSessionCredential([redacted])"
+
+    internal companion object {
+        fun generate(): StmCoreWebSessionCredential {
+            val bytes = ByteArray(BYTE_COUNT)
+            SecureRandom().nextBytes(bytes)
+            return StmCoreWebSessionCredential(
+                bytes.joinToString(separator = "") { byte ->
+                    "%02x".format(byte.toInt() and 0xff)
+                },
+            )
+        }
+
+        fun fromProtocol(value: String): StmCoreWebSessionCredential {
+            require(value.matches(ENCODED_VALUE)) {
+                "Core Web session credential has an invalid encoding"
+            }
+            return StmCoreWebSessionCredential(value)
+        }
+
+        private const val BYTE_COUNT = 32
+        private val ENCODED_VALUE = Regex("[0-9a-f]{64}")
+    }
+}
 
 enum class StmCoreRunState {
     STOPPED,
@@ -181,6 +217,8 @@ data class StmCoreState(
     /** True only after this Core process has durably reconciled installer recovery. */
     val installerRecoveryComplete: Boolean = false,
     val sessionId: String? = null,
+    /** Ephemeral Binder-only secret; deliberately omitted from the durable checkpoint. */
+    val webSessionCredential: StmCoreWebSessionCredential? = null,
     val runState: StmCoreRunState = StmCoreRunState.STOPPED,
     val workload: StmCoreWorkload = StmCoreWorkload.DIAGNOSTIC,
     val localBaseUrl: String? = null,
@@ -211,7 +249,8 @@ data class StmCoreState(
     val canOpenTavern: Boolean
         get() = workload == StmCoreWorkload.SILLY_TAVERN &&
             runState == StmCoreRunState.RUNNING &&
-            localBaseUrl != null
+            localBaseUrl != null &&
+            webSessionCredential != null
 
     val isDiagnosticReady: Boolean
         get() = workload == StmCoreWorkload.DIAGNOSTIC &&
@@ -268,6 +307,20 @@ internal fun StmCoreState.requireValidCoreSnapshot(): StmCoreState = apply {
     if (runState == StmCoreRunState.STOPPED || runState == StmCoreRunState.CRASHED) {
         require(localBaseUrl == null && port == null) {
             "$runState cannot expose a current loopback endpoint"
+        }
+        require(webSessionCredential == null) {
+            "$runState cannot retain a Web session credential"
+        }
+    }
+    if (webSessionCredential != null) {
+        require(workload == StmCoreWorkload.SILLY_TAVERN) {
+            "Only a SillyTavern workload may expose a Web session credential"
+        }
+        require(runState == StmCoreRunState.STARTING ||
+            runState == StmCoreRunState.RUNNING ||
+            runState == StmCoreRunState.DRAINING
+        ) {
+            "A Web session credential requires an active SillyTavern session"
         }
     }
 

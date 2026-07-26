@@ -1,6 +1,7 @@
 package io.github.styx798.sillytavernmanager.stmcore
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -68,6 +69,29 @@ class StmCoreStateTest {
 
         assertThrows(IllegalArgumentException::class.java) {
             invalid.requireValidCoreSnapshot()
+        }
+    }
+
+    @Test
+    fun `stopped state rejects a retained Web session credential`() {
+        val invalid = validState(runState = StmCoreRunState.STOPPED).copy(
+            workload = StmCoreWorkload.SILLY_TAVERN,
+            webSessionCredential = StmCoreWebSessionCredential.generate(),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            invalid.requireValidCoreSnapshot()
+        }
+    }
+
+    @Test
+    fun `Web session credential has strict encoding and redacted text`() {
+        val credential = StmCoreWebSessionCredential.fromProtocol("a".repeat(64))
+
+        assertEquals("a".repeat(64), credential.value)
+        assertEquals("StmCoreWebSessionCredential([redacted])", credential.toString())
+        assertThrows(IllegalArgumentException::class.java) {
+            StmCoreWebSessionCredential.fromProtocol("not-a-session-secret")
         }
     }
 

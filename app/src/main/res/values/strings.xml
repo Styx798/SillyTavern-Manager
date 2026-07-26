@@ -88,7 +88,12 @@
     <string name="tavern_unavailable_body">Activate a runnable version in ST management, then start STM Core from the dashboard. This page loads only a real ST loopback URL reported ready by Core.</string>
     <string name="tavern_navigation_blocked">Navigation outside the current STM Core loopback session was blocked.</string>
     <string name="tavern_page_error">The SillyTavern page failed to load (WebView error %1$d).</string>
-    <string name="tavern_renderer_gone">The SillyTavern page process exited. Return to the dashboard, stop STM Core, and start it again.</string>
+    <string name="tavern_renderer_gone">The SillyTavern page process exited. Reload the page to recover without restarting STM Core.</string>
+    <string name="tavern_session_cookie_error">STM could not establish the private SillyTavern Web session.</string>
+    <string name="tavern_file_chooser_error">Android could not open the system file picker.</string>
+    <string name="tavern_download_saved">Saved “%1$s” (%2$d bytes).</string>
+    <string name="tavern_download_failed">SillyTavern could not save the selected download.</string>
+    <string name="tavern_download_rejected">STM blocked a download outside the current private SillyTavern session.</string>
 
     <string name="st_manager_title">SillyTavern management</string>
     <string name="st_manager_intro">Download, update, switch, and manage your SillyTavern versions. Core jobs, internal slots, and verification evidence live in Logs.</string>
@@ -102,6 +107,7 @@
     <string name="st_download_choose_title">Choose a download</string>
     <string name="st_download_already_downloaded">Already downloaded</string>
     <string name="st_download_branch">Branch: %1$s</string>
+    <string name="st_download_preview_warning">Preview is not recommended. No signed runtime layer is published for Preview, so installation requires an on-device build that typically takes about 10 minutes.</string>
     <string name="st_download_running">Downloading %1$s</string>
     <string name="st_download_phase_resolving">Resolving the branch to an exact commit</string>
     <string name="st_download_phase_downloading">Downloading the commit-pinned archive</string>
@@ -124,18 +130,21 @@
     <string name="st_download_zip_hint">Early ZIP format hint</string>
     <string name="st_download_zip_hint_present">PK header present; this is not full ZIP validation.</string>
     <string name="st_download_zip_hint_missing">PK header missing; archive format is unidentified.</string>
-    <string name="st_downloaded_not_installed_note">Downloaded archives remain external cache entries until you choose Install. Core first tries a matching signed runtime layer. If it cannot be obtained, STM stops and lets you retry or explicitly choose slow local construction. A READY slot is committed only after runnable acceptance. Deleting cache does not delete Core slots or user data.</string>
+    <string name="st_downloaded_not_installed_note">Downloaded archives remain external cache entries until you choose Install. Stable uses a signed runtime layer published by STM. Preview has no prebuilt runtime layer and requires your explicit confirmation for an on-device build of about 10 minutes. A READY slot is committed only after runnable acceptance. Deleting cache does not delete Core slots or user data.</string>
     <string name="st_download_core_install">Install with Core</string>
     <string name="st_download_core_install_note">Core first tries a signed runtime layer that exactly matches this ST version. It never starts the slower bundled npm construction without your explicit confirmation. Both paths run staged acceptance before atomically committing the READY slot.</string>
+    <string name="st_download_preview_local_install">Build Preview on device (about 10 minutes)</string>
+    <string name="st_download_preview_install_note">Preview is not recommended and never attempts signed fast installation. Starting its approximately 10-minute on-device build still requires another explicit confirmation.</string>
     <string name="st_install_fast_unavailable_title">Fast installation is unavailable</string>
     <string name="st_install_transport_unavailable_body">STM could not download the signed runtime layer. Check the active network, DNS, proxy, or VPN, then retry. You can also explicitly choose slower local construction.</string>
     <string name="st_install_not_available_body">STM does not currently provide a signed runtime layer for this exact SillyTavern version. You can stop here or explicitly build the runtime locally.</string>
     <string name="st_install_retry_fast">Check network and retry</string>
     <string name="st_install_use_local">Use local construction</string>
-    <string name="st_install_local_warning">Local construction downloads and processes many npm files. It may take several minutes or longer and use substantially more storage, memory, and battery. Keep the network stable and do not force-stop STM.</string>
+    <string name="st_install_local_warning">Local construction downloads and processes many npm files. It typically takes about 10 minutes and uses substantially more storage, memory, and battery. Keep the network stable and do not force-stop STM.</string>
     <string name="st_install_not_now">Not now</string>
-    <string name="st_install_local_confirm_title">Use slow local construction?</string>
-    <string name="st_install_local_confirm_body">STM will use its bundled npm 11.6.2 toolchain to install dependencies and build lib.js on this device. This can take several minutes or longer. Keep the network stable and avoid force-stopping STM until the operation finishes.</string>
+    <string name="st_install_local_confirm_title">Start an approximately 10-minute on-device build?</string>
+    <string name="st_install_local_confirm_body">STM will use its bundled npm 11.6.2 toolchain to install dependencies and build lib.js on this device, which typically takes about 10 minutes. If you continue, keep the network stable and do not force-stop STM.</string>
+    <string name="st_install_preview_local_confirm_body">STM will use its bundled npm 11.6.2 toolchain to install dependencies and build lib.js on this device, which typically takes about 10 minutes. Preview is not recommended for ordinary users. If you continue, keep the network stable and do not force-stop STM.</string>
     <string name="st_install_local_confirm_action">Start local construction</string>
     <string name="st_download_core_preflight">Send to Core preflight</string>
     <string name="st_download_core_preflight_note">Preflight only re-hashes, safely extracts and inspects the exact source. It does not install dependencies or create a READY slot.</string>
@@ -266,6 +275,7 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_delete">Delete</string>
     <string name="action_dismiss">Dismiss</string>
+    <string name="action_reload">Reload</string>
     <string name="wait_continue">Continue waiting</string>
     <string name="wait_npm_title">npm is still installing dependencies</string>
     <string name="wait_npm_body">The first 5-minute interval has elapsed. The network, npm registry, device storage, or many small-file writes may be slow. Continue waiting for another 5 minutes, or cancel and clean the staging operation.</string>
@@ -310,6 +320,12 @@
     <string name="settings_files_title">App data</string>
     <string name="settings_files_entry_title">Manage STM files</string>
     <string name="settings_files_entry_summary">Browse, edit text files, and delete files stored in STM’s private data areas.</string>
+    <string name="settings_complete_removal_title">Complete removal</string>
+    <string name="settings_complete_removal_action">Uninstall STM and delete all app data</string>
+    <string name="settings_complete_removal_summary">This is separate from removing an ST version or clearing download cache. Android will delete STM, every Core slot, cache, settings, and ST user data only after its own uninstall confirmation.</string>
+    <string name="settings_complete_removal_confirm_title">Continue to complete removal?</string>
+    <string name="settings_complete_removal_confirm_body">STM will open Android’s app details. Review the warning there and choose Uninstall only if you intend to permanently delete STM and all of its app data. This cannot be undone from STM.</string>
+    <string name="settings_complete_removal_continue">Open Android app details</string>
 
     <string name="files_title">STM files</string>
     <string name="files_intro">Browse the internal and external data directories that belong to this app.</string>
