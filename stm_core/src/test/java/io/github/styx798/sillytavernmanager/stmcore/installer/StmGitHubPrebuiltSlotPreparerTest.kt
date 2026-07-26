@@ -3,6 +3,9 @@ package io.github.styx798.sillytavernmanager.stmcore.installer
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.net.URL
 import java.security.MessageDigest
 import java.security.Principal
@@ -386,6 +389,83 @@ class StmGitHubPrebuiltSlotPreparerTest {
     }
 
     @Test
+    fun `HTTPS downloader retries transient response failures before receiving bytes`() {
+        val body = "eventual release response".toByteArray()
+        val entry = testEntry(body.size.toLong(), body.sha256())
+        val destination = File(temporaryFolder.newFolder("download-retry"), "runtime.part")
+        val attempts = AtomicInteger()
+        val waits = mutableListOf<Long>()
+        val downloader = StmGitHubRuntimeLayerDownloader(
+            maxResponseAttempts = 3,
+            retryBaseDelayMillis = 25,
+            retryWait = waits::add,
+            connectionFactory = { url ->
+                val attempt = attempts.incrementAndGet()
+                FakeHttpsURLConnection(
+                    url = url,
+                    observedResponseCode = 200,
+                    body = body,
+                    responseFailure = SocketTimeoutException("sensitive local detail")
+                        .takeIf { attempt < 3 },
+                )
+            },
+        )
+
+        val result = downloader.download(
+            entry,
+            destination,
+            StmExtractionCancellation.NONE,
+            { _, _, _ -> },
+        )
+
+        assertTrue(result is StmRuntimeLayerDownloadResult.Downloaded)
+        assertEquals(3, attempts.get())
+        assertEquals(listOf(25L, 50L), waits)
+        assertTrue(destination.readBytes().contentEquals(body))
+    }
+
+    @Test
+    fun `HTTPS downloader reports only failure type host and bounded attempts`() {
+        val entry = testEntry(1, "0".repeat(64)).copy(
+            downloadUrl = StmPrebuiltRuntimeCatalog.ST_1_18_0.downloadUrl +
+                "?temporary-secret=must-not-leak",
+        )
+        val destination = File(temporaryFolder.newFolder("download-diagnostic"), "runtime.part")
+        val attempts = AtomicInteger()
+        val downloader = StmGitHubRuntimeLayerDownloader(
+            maxResponseAttempts = 3,
+            retryBaseDelayMillis = 0,
+            retryWait = {},
+            connectionFactory = { url ->
+                attempts.incrementAndGet()
+                FakeHttpsURLConnection(
+                    url = url,
+                    observedResponseCode = 200,
+                    body = ByteArray(0),
+                    responseFailure = UnknownHostException("private resolver message"),
+                )
+            },
+        )
+
+        val result = downloader.download(
+            entry,
+            destination,
+            StmExtractionCancellation.NONE,
+            { _, _, _ -> },
+        )
+
+        assertTrue(result is StmRuntimeLayerDownloadResult.Unavailable)
+        result as StmRuntimeLayerDownloadResult.Unavailable
+        assertEquals(3, attempts.get())
+        assertTrue(result.detail.contains("github.com"))
+        assertTrue(result.detail.contains("UnknownHostException"))
+        assertTrue(result.detail.contains("3 attempt(s)"))
+        assertFalse(result.detail.contains("temporary-secret"))
+        assertFalse(result.detail.contains("private resolver message"))
+        assertFalse(destination.exists())
+    }
+
+    @Test
     fun `HTTPS downloader rejects redirects outside GitHub asset hosts`() {
         val entry = testEntry(1, "0".repeat(64))
         val destination = File(temporaryFolder.newFolder("download-redirect"), "runtime.part")
@@ -481,6 +561,7 @@ class StmGitHubPrebuiltSlotPreparerTest {
         private val observedResponseCode: Int,
         private val body: ByteArray,
         private val headers: Map<String, String> = emptyMap(),
+        private val responseFailure: IOException? = null,
     ) : HttpsURLConnection(url) {
         override fun connect() = Unit
 
@@ -488,7 +569,8 @@ class StmGitHubPrebuiltSlotPreparerTest {
 
         override fun usingProxy(): Boolean = false
 
-        override fun getResponseCode(): Int = observedResponseCode
+        override fun getResponseCode(): Int =
+            responseFailure?.let { throw it } ?: observedResponseCode
 
         override fun getInputStream() = ByteArrayInputStream(body)
 

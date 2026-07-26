@@ -9,14 +9,19 @@ internal class StmCoreSnapshotEpoch {
     private var lastAcceptedRevision = 0L
     private var lastProcessIdentity: String? = null
     private var awaitingNewProcessIdentity = true
+    private var allowPreviousProcessIdentity = false
 
     fun accept(state: StmCoreState): Boolean {
         val processIdentity = state.processIdentity ?: return false
         if (awaitingNewProcessIdentity) {
-            if (lastProcessIdentity != null && processIdentity == lastProcessIdentity) return false
-            lastProcessIdentity = processIdentity
-            lastAcceptedRevision = 0L
+            if (lastProcessIdentity != null && processIdentity == lastProcessIdentity) {
+                if (!allowPreviousProcessIdentity) return false
+            } else {
+                lastProcessIdentity = processIdentity
+                lastAcceptedRevision = 0L
+            }
             awaitingNewProcessIdentity = false
+            allowPreviousProcessIdentity = false
         } else if (processIdentity != lastProcessIdentity) {
             return false
         }
@@ -27,6 +32,16 @@ internal class StmCoreSnapshotEpoch {
 
     fun disconnect() {
         awaitingNewProcessIdentity = true
+        allowPreviousProcessIdentity = false
+    }
+
+    /**
+     * A removed App task may be reopened before the old Core finishes cancelling maintenance.
+     * That explicit rebind may accept a newer revision from that same private Core process.
+     */
+    fun resumeAppTask() {
+        awaitingNewProcessIdentity = true
+        allowPreviousProcessIdentity = true
     }
 }
 

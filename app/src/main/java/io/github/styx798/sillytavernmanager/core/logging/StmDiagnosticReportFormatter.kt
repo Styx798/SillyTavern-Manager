@@ -1,5 +1,6 @@
 package io.github.styx798.sillytavernmanager.core.logging
 
+import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreConnectionState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreState
 import java.time.Instant
 
@@ -19,6 +20,7 @@ object StmDiagnosticReportFormatter {
         generatedAtEpochMs: Long,
         environment: StmDiagnosticEnvironment,
         coreState: StmCoreState,
+        coreConnectionState: StmCoreConnectionState,
         entries: List<LogEntry>,
         runtimeLogTail: String?,
         runtimeLogTruncated: Boolean,
@@ -44,12 +46,15 @@ object StmDiagnosticReportFormatter {
         appendLine("[STM Core]")
         appendLine("Protocol: ${coreState.protocolVersion}")
         appendLine("Core version: ${coreState.coreVersion}")
+        appendLine("Connection state: $coreConnectionState")
         appendLine("Node: ${coreState.nodeVersion ?: "unknown"}")
         appendLine("Revision: ${coreState.revision}")
+        appendLine("Snapshot updated UTC: ${Instant.ofEpochMilli(coreState.updatedAtEpochMs)}")
         appendLine("Run state: ${coreState.runState}")
         appendLine("Workload: ${coreState.workload}")
         appendLine("Installer recovery complete: ${coreState.installerRecoveryComplete}")
         appendLine("Process ID: ${coreState.processId ?: "none"}")
+        appendLine("Process identity: ${coreState.processIdentity ?: "none"}")
         appendLine("Session ID: ${coreState.sessionId ?: "none"}")
         appendLine("Loopback: ${coreState.localBaseUrl ?: "none"}")
         appendLine("Summary: ${sanitize(coreState.summary ?: "none")}")

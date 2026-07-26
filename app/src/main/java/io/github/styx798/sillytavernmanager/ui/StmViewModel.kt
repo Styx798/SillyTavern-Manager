@@ -118,6 +118,7 @@ class StmViewModel(container: AppContainer) : ViewModel() {
                 val result = diagnosticLogExporter.export(
                     destination = destination,
                     coreState = stmCoreState.value,
+                    coreConnectionState = stmCoreConnectionState.value,
                     entries = logEntries.value,
                 )
             ) {

@@ -32,6 +32,30 @@ class StmCoreControllerStateGateTest {
     }
 
     @Test
+    fun `resumed app task accepts a newer revision from the Core process still cleaning up`() {
+        val receiver = StmCoreSnapshotEpoch()
+
+        assertTrue(receiver.accept(snapshot(processIdentity = "process-a", revision = 7)))
+        receiver.disconnect()
+        receiver.resumeAppTask()
+        assertFalse(receiver.accept(snapshot(processIdentity = "process-a", revision = 7)))
+        assertTrue(receiver.accept(snapshot(processIdentity = "process-a", revision = 8)))
+        assertFalse(receiver.accept(snapshot(processIdentity = "process-a", revision = 8)))
+    }
+
+    @Test
+    fun `resumed app task also accepts a replacement Core process`() {
+        val receiver = StmCoreSnapshotEpoch()
+
+        assertTrue(receiver.accept(snapshot(processIdentity = "process-a", revision = 900)))
+        receiver.disconnect()
+        receiver.resumeAppTask()
+        assertTrue(receiver.accept(snapshot(processIdentity = "process-b", revision = 1)))
+        assertFalse(receiver.accept(snapshot(processIdentity = "process-a", revision = 901)))
+        assertTrue(receiver.accept(snapshot(processIdentity = "process-b", revision = 2)))
+    }
+
+    @Test
     fun `command is rejected without delivery while connecting or disconnected`() {
         for (state in listOf(
             StmCoreConnectionState.CONNECTING,

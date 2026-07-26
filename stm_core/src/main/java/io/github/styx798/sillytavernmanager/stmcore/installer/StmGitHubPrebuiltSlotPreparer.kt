@@ -266,10 +266,18 @@ internal class StmGitHubPrebuiltSlotPreparer(
 internal class StmGitHubRuntimeLayerDownloader(
     private val connectTimeoutMillis: Int = 5_000,
     private val readTimeoutMillis: Int = 10_000,
+    private val maxResponseAttempts: Int = 3,
+    private val retryBaseDelayMillis: Long = 500,
+    private val retryWait: (Long) -> Unit = Thread::sleep,
     private val connectionFactory: (URL) -> HttpsURLConnection = { url ->
         url.openConnection() as HttpsURLConnection
     },
 ) : StmRuntimeLayerDownloader {
+    init {
+        require(maxResponseAttempts in 1..MAX_RESPONSE_ATTEMPTS)
+        require(retryBaseDelayMillis in 0..MAX_RETRY_BASE_DELAY_MILLIS)
+    }
+
     override fun download(
         entry: StmPrebuiltRuntimeCatalogEntry,
         destination: File,
@@ -296,6 +304,7 @@ internal class StmGitHubRuntimeLayerDownloader(
 
         var current = initial
         var redirects = 0
+        var responseAttempts = 0
         while (true) {
             if (cancellation.isCancelled()) {
                 return cancelled(destinationPath)
@@ -311,13 +320,31 @@ internal class StmGitHubRuntimeLayerDownloader(
                     useCaches = false
                 }
             } catch (error: Exception) {
-                return unavailable(destinationPath, "Release connection failed")
+                return unavailable(
+                    destinationPath,
+                    networkFailureDetail("connection", current, error, attempts = 1),
+                )
             }
             try {
                 val code = try {
                     connection.responseCode
-                } catch (_: IOException) {
-                    return unavailable(destinationPath, "Release response was unavailable")
+                } catch (error: IOException) {
+                    responseAttempts += 1
+                    if (responseAttempts < maxResponseAttempts &&
+                        waitBeforeResponseRetry(responseAttempts, cancellation)
+                    ) {
+                        continue
+                    }
+                    if (cancellation.isCancelled()) return cancelled(destinationPath)
+                    return unavailable(
+                        destinationPath,
+                        networkFailureDetail(
+                            stage = "response",
+                            uri = current,
+                            error = error,
+                            attempts = responseAttempts,
+                        ),
+                    )
                 }
                 when {
                     code == HttpURLConnection.HTTP_OK ->
@@ -361,6 +388,7 @@ internal class StmGitHubRuntimeLayerDownloader(
                             )
                         }
                         current = redirected
+                        responseAttempts = 0
                     }
 
                     code in UNAVAILABLE_CODES || code in 500..599 ->
@@ -379,6 +407,34 @@ internal class StmGitHubRuntimeLayerDownloader(
                 connection.disconnect()
             }
         }
+    }
+
+    private fun waitBeforeResponseRetry(
+        failedAttempt: Int,
+        cancellation: StmExtractionCancellation,
+    ): Boolean {
+        if (cancellation.isCancelled()) return false
+        val delayMillis = retryBaseDelayMillis * failedAttempt
+        try {
+            retryWait(delayMillis)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return false
+        }
+        return !cancellation.isCancelled()
+    }
+
+    private fun networkFailureDetail(
+        stage: String,
+        uri: URI,
+        error: Throwable,
+        attempts: Int,
+    ): String {
+        val host = uri.host?.lowercase(Locale.ROOT).orEmpty().ifBlank { "unknown-host" }
+        val type = error.javaClass.simpleName
+            .takeIf { it.matches(SAFE_EXCEPTION_TYPE) }
+            ?: "IOException"
+        return "Release $stage from $host was unavailable ($type) after $attempts attempt(s)"
     }
 
     private fun receiveBody(
@@ -532,9 +588,12 @@ internal class StmGitHubRuntimeLayerDownloader(
 
     private companion object {
         const val MAX_REDIRECTS = 5
+        const val MAX_RESPONSE_ATTEMPTS = 3
+        const val MAX_RETRY_BASE_DELAY_MILLIS = 5_000L
         const val COPY_BUFFER_BYTES = 64 * 1024
         const val PROGRESS_INTERVAL_NANOS = 500_000_000L
         const val SHA256 = "SHA-256"
+        val SAFE_EXCEPTION_TYPE = Regex("[A-Za-z][A-Za-z0-9]{0,63}")
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         val UNAVAILABLE_CODES = setOf(401, 403, 404, 408, 410, 425, 429)
     }

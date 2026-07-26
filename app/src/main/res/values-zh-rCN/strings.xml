@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">开发版本 v0.0.2</string>
+    <string name="app_subtitle">开发版本 v0.0.3</string>
 
     <string name="nav_dashboard">主页</string>
     <string name="nav_tavern">酒馆</string>
