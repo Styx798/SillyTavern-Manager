@@ -99,6 +99,7 @@ internal data class StmRuntimeSlotAdmissionEvidence(
     val dependencyTreeSha256: String,
     val postAdapterProgramTreeSha256: String,
     val runtimeFiles: Map<String, StmRuntimeFileBinding>,
+    val preparedSlotEntries: List<StmSlotManifestEntry>? = null,
 ) {
     companion object {
         const val RUNTIME_DIRECTORY = ".stm-runtime"
@@ -303,7 +304,14 @@ internal class StmSlotStore(
 
         val manifest = try {
             resolveOwnedPayload(payload, stagingRoot)
-            buildManifest(payload, metadataAllowed = false, syncFiles = true)
+            val prepared = request.runtimeEvidence
+                ?.takeIf { it.supplyKind == StmRuntimeSupplyKind.SIGNED_PREBUILT }
+                ?.preparedSlotEntries
+            if (prepared != null) {
+                buildPreparedManifest(payload, request, prepared)
+            } else {
+                buildManifest(payload, metadataAllowed = false, syncFiles = true)
+            }
         } catch (error: SlotValidationException) {
             return StmSlotCommitOutcome.Blocked(error.code, error.safeDetail())
         } catch (error: IllegalArgumentException) {
@@ -395,7 +403,7 @@ internal class StmSlotStore(
         faultInjector.hit(StmSlotStoreFailpoint.AFTER_SLOT_MOVE)
         bestEffortSyncDirectory(slotsRoot)
 
-        return when (val verification = verifyCommitted(request.slotId)) {
+        return when (val verification = readCommitted(request.slotId)) {
             is StmSlotVerificationResult.Valid -> StmSlotCommitOutcome.Ready(verification.slot)
             StmSlotVerificationResult.Missing -> StmSlotCommitOutcome.Blocked(
                 StmSlotBlockCode.COMMITTED_SLOT_INVALID,
@@ -411,7 +419,11 @@ internal class StmSlotStore(
         }
     }
 
-    fun verifyCommitted(slotId: String): StmSlotVerificationResult {
+    /**
+     * Reads Core-owned control evidence and checks only the small set of runtime-critical paths.
+     * This is the normal install/start/recovery path and intentionally does not hash the slot tree.
+     */
+    fun readCommitted(slotId: String): StmSlotVerificationResult {
         return try {
             requireSafeIdentifier(slotId, "slot ID")
             val slot = resolveChild(slotsRoot, slotId)
@@ -423,26 +435,30 @@ internal class StmSlotStore(
             validateControlDirectory(controlDirectory)
             val storedManifest = readManifest(controlDirectory.resolve(MANIFEST_FILE))
             val metadata = readMetadata(controlDirectory.resolve(METADATA_FILE))
-            require(metadata.slotId == slotId) { "Slot metadata ID does not match its directory" }
-            require(metadata.admission == StmSlotAdmission.READY) {
-                "Only READY metadata may exist in committed slots"
-            }
-            require(metadata.manifestSha256 == storedManifest.manifestSha256) {
-                "Slot metadata does not match the stored manifest"
-            }
-            require(metadata.manifestEntryCount == storedManifest.entries.size) {
-                "Slot metadata entry count does not match the stored manifest"
-            }
-            require(metadata.totalFileBytes == storedManifest.totalFileBytes) {
-                "Slot metadata byte count does not match the stored manifest"
-            }
+            requireStoredControlIdentity(slotId, metadata, storedManifest)
+            validateCriticalPaths(slot, metadata, storedManifest)
+            StmSlotVerificationResult.Valid(
+                StmCommittedSlot(metadata, storedManifest, slot.toFile()),
+            )
+        } catch (error: Exception) {
+            StmSlotVerificationResult.Invalid(error.safeDetail())
+        }
+    }
+
+    /** User-triggered diagnostic: performs the expensive full-tree SHA-256 comparison. */
+    fun verifyCommitted(slotId: String): StmSlotVerificationResult {
+        return try {
+            val structural = readCommitted(slotId)
+            if (structural !is StmSlotVerificationResult.Valid) return structural
+            val slot = structural.slot.directory.toPath()
+            val storedManifest = structural.slot.manifest
 
             val actualManifest = buildManifest(slot, metadataAllowed = true, syncFiles = false)
             require(actualManifest == storedManifest) {
                 "Committed slot content differs from its immutable manifest"
             }
             StmSlotVerificationResult.Valid(
-                StmCommittedSlot(metadata, storedManifest, slot.toFile()),
+                structural.slot,
             )
         } catch (error: Exception) {
             StmSlotVerificationResult.Invalid(error.safeDetail())
@@ -462,7 +478,7 @@ internal class StmSlotStore(
                         "Direct slot entry has an unsafe identifier",
                     )
                 } else {
-                    when (val result = verifyCommitted(entryName)) {
+                    when (val result = readCommitted(entryName)) {
                         StmSlotVerificationResult.Missing ->
                             StmSlotVerificationResult.Invalid(
                                 "Direct slot entry disappeared during committed-slot scan",
@@ -474,6 +490,144 @@ internal class StmSlotStore(
                 StmSlotScanEntry(entryName, verification)
             }.sortedBy(StmSlotScanEntry::entryName)
         }
+
+    private fun buildPreparedManifest(
+        payload: Path,
+        request: StmSlotCommitRequest,
+        preparedEntries: List<StmSlotManifestEntry>,
+    ): StmSlotContentManifest {
+        require(request.runtimeEvidence?.supplyKind == StmRuntimeSupplyKind.SIGNED_PREBUILT) {
+            "Only signed runtime evidence may provide a fast admission manifest"
+        }
+        require(preparedEntries.isNotEmpty()) { "Prepared slot manifest is empty" }
+        val sorted = preparedEntries.sortedBy(StmSlotManifestEntry::relativePath)
+        require(sorted == preparedEntries) { "Prepared slot manifest is not sorted" }
+        val collisionKeys = mutableSetOf<String>()
+        var totalFileBytes = 0L
+        sorted.forEach { entry ->
+            validateManifestRelativePath(entry.relativePath)
+            require(!entry.relativePath.startsWith("$CONTROL_DIRECTORY/") &&
+                entry.relativePath != CONTROL_DIRECTORY) {
+                "Prepared slot manifest contains reserved metadata"
+            }
+            val collisionKey = entry.relativePath.lowercase(Locale.ROOT)
+            require(collisionKeys.add(collisionKey)) {
+                "Prepared slot manifest contains a path collision"
+            }
+            when (entry.type) {
+                StmSlotManifestEntryType.DIRECTORY -> require(
+                    entry.bytes == 0L && entry.fileSha256 == null,
+                ) {
+                    "Prepared directory identity is invalid"
+                }
+
+                StmSlotManifestEntryType.FILE -> {
+                    require(entry.bytes in 0..MAX_SINGLE_FILE_BYTES) {
+                        "Prepared file size is invalid"
+                    }
+                    require(entry.fileSha256?.matches(LOWERCASE_SHA256_PATTERN) == true) {
+                        "Prepared file SHA-256 is invalid"
+                    }
+                    totalFileBytes = Math.addExact(totalFileBytes, entry.bytes)
+                    require(totalFileBytes <= MAX_TOTAL_FILE_BYTES) {
+                        "Prepared slot exceeds the allowed total size"
+                    }
+                }
+            }
+        }
+        val encoded = encodeManifest(sorted, totalFileBytes)
+        require(encoded.size <= MAX_MANIFEST_BYTES) { "Prepared slot manifest is too large" }
+        val manifest = StmSlotContentManifest(
+            entries = sorted,
+            totalFileBytes = totalFileBytes,
+            manifestSha256 = sha256(encoded).toHex(),
+        )
+        validateCriticalPaths(payload, request.archiveRoot, manifest)
+        return manifest
+    }
+
+    private fun requireStoredControlIdentity(
+        slotId: String,
+        metadata: StmSlotMetadata,
+        storedManifest: StmSlotContentManifest,
+    ) {
+        require(metadata.slotId == slotId) { "Slot metadata ID does not match its directory" }
+        require(metadata.admission == StmSlotAdmission.READY) {
+            "Only READY metadata may exist in committed slots"
+        }
+        require(metadata.manifestSha256 == storedManifest.manifestSha256) {
+            "Slot metadata does not match the stored manifest"
+        }
+        require(metadata.manifestEntryCount == storedManifest.entries.size) {
+            "Slot metadata entry count does not match the stored manifest"
+        }
+        require(metadata.totalFileBytes == storedManifest.totalFileBytes) {
+            "Slot metadata byte count does not match the stored manifest"
+        }
+    }
+
+    private fun validateCriticalPaths(
+        slot: Path,
+        metadata: StmSlotMetadata,
+        manifest: StmSlotContentManifest,
+    ) {
+        if (metadata.payloadKind != StmSlotPayloadKind.SILLY_TAVERN_SOURCE) return
+        validateCriticalPaths(slot, metadata.archiveRoot, manifest)
+    }
+
+    private fun validateCriticalPaths(
+        slot: Path,
+        archiveRoot: String?,
+        manifest: StmSlotContentManifest,
+    ) {
+        val root = archiveRoot ?: return
+        val byPath = manifest.entries.associateBy(StmSlotManifestEntry::relativePath)
+        val runtimeFiles = if (
+            byPath.containsKey(
+                "${StmRuntimeSlotAdmissionEvidence.RUNTIME_DIRECTORY}/" +
+                    StmRuntimeSlotAdmissionEvidence.SIGNATURE_FILE,
+            )
+        ) {
+            StmRuntimeSlotAdmissionEvidence.SIGNED_PREBUILT_RUNTIME_FILES
+        } else {
+            StmRuntimeSlotAdmissionEvidence.DEVICE_LOCAL_BUILD_RUNTIME_FILES
+        }
+        val critical = buildList {
+            add(root)
+            REQUIRED_ST_SOURCE_FILES.forEach { add("$root/$it") }
+            add("$root/node_modules")
+            add("$root/src/middleware/webpack-serve.js")
+            add(StmRuntimeSlotAdmissionEvidence.RUNTIME_DIRECTORY)
+            runtimeFiles.forEach { name ->
+                add("${StmRuntimeSlotAdmissionEvidence.RUNTIME_DIRECTORY}/$name")
+            }
+        }
+        critical.forEach { relative ->
+            val expected = requireNotNull(byPath[relative]) {
+                "Slot manifest is missing critical path $relative"
+            }
+            val path = relative.split('/').fold(slot) { current, segment ->
+                current.resolve(segment)
+            }.normalize()
+            require(path.startsWith(slot) && !Files.isSymbolicLink(path)) {
+                "Critical slot path is unsafe: $relative"
+            }
+            when (expected.type) {
+                StmSlotManifestEntryType.DIRECTORY -> require(
+                    Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS),
+                ) {
+                    "Critical slot directory is missing: $relative"
+                }
+
+                StmSlotManifestEntryType.FILE -> require(
+                    Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
+                        Files.size(path) == expected.bytes,
+                ) {
+                    "Critical slot file is missing or changed length: $relative"
+                }
+            }
+        }
+    }
 
     @Synchronized
     fun deleteSlot(
@@ -1042,6 +1196,7 @@ internal class StmSlotStore(
         const val MAX_MANIFEST_BYTES = 64 * 1024 * 1024
         const val MAX_METADATA_PAYLOAD_BYTES = 8 * 1024
         const val MAX_METADATA_BYTES = METADATA_HEADER_BYTES + MAX_METADATA_PAYLOAD_BYTES + SHA256_BYTES
+        val LOWERCASE_SHA256_PATTERN = Regex("[0-9a-f]{64}")
     }
 }
 

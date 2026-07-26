@@ -1,15 +1,22 @@
 package io.github.styx798.sillytavernmanager.stmcore
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.RemoteException
-import android.os.ParcelFileDescriptor
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -29,6 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class StmCoreService : Service(), FeatherEngine.Callback {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val clients = linkedMapOf<IBinder, Messenger>()
+    private val clientDeaths = linkedMapOf<IBinder, IBinder.DeathRecipient>()
     private val incomingMessenger = Messenger(
         Handler(Looper.getMainLooper()) { message -> handleIncomingMessage(message) },
     )
@@ -51,6 +59,8 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     private var installerRecoveryComplete = false
     private var recoveryEvidenceCount = 0
     private var serviceDestroyed = false
+    private var shutdownMode: CoreShutdownMode? = null
+    private var foregroundActive = false
 
     override fun onCreate() {
         super.onCreate()
@@ -61,13 +71,41 @@ class StmCoreService : Service(), FeatherEngine.Callback {
 
     override fun onBind(intent: Intent?): IBinder = incomingMessenger.binder
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_MARK_APP_TASK_OWNED -> Unit
+            ACTION_PREPARE_SILLY_TAVERN -> ensureSessionForeground()
+            ACTION_PREPARE_CORE_SHUTDOWN -> Unit
+            ACTION_RELEASE_SILLY_TAVERN_FOREGROUND -> {
+                if (!initializationComplete ||
+                    state.runState == StmCoreRunState.STOPPED ||
+                    state.runState == StmCoreRunState.CRASHED
+                ) {
+                    releaseSessionForeground()
+                }
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        broadcastAppTaskRemoved()
+        beginOwnerLossShutdown("The STM task was removed")
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         serviceDestroyed = true
         cancelWatchdog()
+        releaseSessionForeground()
         runtimeVerificationExecutor.shutdownNow()
         if (::installerCoordinator.isInitialized) installerCoordinator.close()
         checkpointExecutor.shutdownNow()
         if (::engine.isInitialized) engine.destroy()
+        clientDeaths.forEach { (binder, recipient) ->
+            runCatching { binder.unlinkToDeath(recipient, 0) }
+        }
+        clientDeaths.clear()
         clients.clear()
         super.onDestroy()
     }
@@ -87,7 +125,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     journalRoot = StmCorePaths.installerJournalRoot(this),
                     eventSink = { event -> mainHandler.post { applyInstallerEvent(event) } },
                     runtimeSlotPreparer = StmGitHubPrebuiltSlotPreparer(
-                        localFallback = localRuntimePreparer,
+                        localPreparer = localRuntimePreparer,
                         runnableAcceptor = localRuntimePreparer,
                     ),
                     faultInjector = debugInstallerFaultInjector(),
@@ -140,6 +178,9 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             }
             cancelWatchdog()
             val healthyAt = System.currentTimeMillis()
+            if (state.workload == StmCoreWorkload.SILLY_TAVERN) {
+                updateSessionForeground(state.runningSillyTavernVersion())
+            }
             publish {
                 copy(
                     runState = StmCoreRunState.RUNNING,
@@ -153,6 +194,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                         "Feather Engine health check passed"
                     },
                     error = null,
+                    waitPrompt = null,
                 )
             }
         }
@@ -165,7 +207,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             cancelWatchdog()
             val running = state.runningSlot
             if (state.workload == StmCoreWorkload.SILLY_TAVERN && running != null) {
-                verifyStoppedSillyTavernSlot(sessionId, running, terminationUsed)
+                inspectStoppedSillyTavernSlot(sessionId, running, terminationUsed)
             } else {
                 publishStopped(terminationUsed)
             }
@@ -183,7 +225,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
     }
 
-    private fun verifyStoppedSillyTavernSlot(
+    private fun inspectStoppedSillyTavernSlot(
         sessionId: String,
         running: StmCoreActiveSlot,
         terminationUsed: Boolean,
@@ -200,11 +242,11 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             return
         }
         publish {
-            copy(summary = "SillyTavern stopped; verifying its immutable slot")
+            copy(summary = "SillyTavern stopped; checking its slot lease metadata")
         }
         runtimeVerificationExecutor.execute {
             val verification = runCatching {
-                installerCoordinator.verifyCommittedSlot(running.slotId)
+                installerCoordinator.readCommittedSlot(running.slotId)
             }.getOrElse { error ->
                 StmSlotVerificationResult.Invalid(error.safeMessage())
             }
@@ -241,7 +283,11 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     }
 
     private fun publishStopped(terminationUsed: Boolean) {
-        publish {
+        publish(afterDurableCommit = {
+            releaseSessionForeground()
+            maybeFinishCoreShutdown()
+            if (shutdownMode == null) stopSelf()
+        }) {
             copy(
                 operationId = null,
                 sessionId = null,
@@ -252,11 +298,12 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 summary = if (terminationUsed) {
                     "Feather Engine stopped after terminateExecution escalation"
                 } else if (workload == StmCoreWorkload.SILLY_TAVERN) {
-                    "SillyTavern stopped cleanly; its immutable slot was verified"
+                    "SillyTavern stopped cleanly; its slot lease metadata still matches"
                 } else {
                     "Feather Engine session stopped cleanly"
                 },
                 error = null,
+                waitPrompt = null,
             )
         }
     }
@@ -264,14 +311,17 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     private fun startCore(operationId: String) {
         if (processTerminationScheduled) return
         if (!installerRecoveryComplete) {
+            releaseSessionForeground()
             publish { copy(summary = "Start ignored while Core recovery is pending") }
             return
         }
         if (!state.canStart) {
+            releaseSessionForeground()
             publish { copy(summary = "Start ignored while Core is ${runState.name.lowercase()}") }
             return
         }
         if (state.jobs.any { it.state in ACTIVE_JOB_STATES }) {
+            releaseSessionForeground()
             publish { copy(summary = "Start ignored while Core maintenance is active") }
             return
         }
@@ -287,6 +337,9 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
         val runsSillyTavern =
             active != null && activeSlot?.artifact?.kind == StmCoreArtifactKind.SILLY_TAVERN_SOURCE
+        if (runsSillyTavern) {
+            ensureSessionForeground(requireNotNull(activeSlot).artifact?.stVersion)
+        }
         publish(afterDurableCommit = { committed ->
             if (state.sessionId != sessionId ||
                 state.runState != StmCoreRunState.STARTING ||
@@ -294,21 +347,16 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             ) {
                 return@publish
             }
-            val startTimeout = if (runsSillyTavern) {
-                SILLY_TAVERN_START_TIMEOUT_MILLIS
+            if (runsSillyTavern) {
+                scheduleStartReminder(operationId, SILLY_TAVERN_START_TIMEOUT_MILLIS)
             } else {
-                START_TIMEOUT_MILLIS
-            }
-            scheduleWatchdog(startTimeout) {
-                crashAndTerminate(
-                    code = "START_TIMEOUT",
-                    summary = "STM Core did not become healthy in time",
-                    detail = if (runsSillyTavern) {
-                        "SillyTavern /version did not pass within $startTimeout ms"
-                    } else {
-                        "Synthetic Node health did not pass within $startTimeout ms"
-                    },
-                )
+                scheduleWatchdog(START_TIMEOUT_MILLIS) {
+                    crashAndTerminate(
+                        code = "START_TIMEOUT",
+                        summary = "STM Core diagnostic did not become healthy in time",
+                        detail = "Synthetic Node health did not pass within $START_TIMEOUT_MILLIS ms",
+                    )
+                }
             }
             val sessionDirectory = File(
                 StmCorePaths.sessionsRoot(this),
@@ -341,6 +389,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     engine.start(sessionId, sessionDirectory)
                 }
             } catch (error: Throwable) {
+                releaseSessionForeground()
                 crashAndTerminate(
                     code = "SESSION_CREATE_FAILED",
                     summary = "STM Core could not create a Feather Engine session",
@@ -367,6 +416,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 },
                 error = null,
                 nodeVersion = null,
+                waitPrompt = null,
             )
         }
     }
@@ -398,6 +448,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     copy(
                         operationId = operationId,
                         runState = StmCoreRunState.DRAINING,
+                        waitPrompt = null,
                         summary = if (workload == StmCoreWorkload.SILLY_TAVERN) {
                             "Draining the SillyTavern server"
                         } else {
@@ -457,6 +508,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
 
     private fun publishCrash(code: String, summary: String, detail: String) {
         if (state.runState == StmCoreRunState.CRASHED && state.error?.code == code) return
+        releaseSessionForeground()
         publish {
             copy(
                 runState = StmCoreRunState.CRASHED,
@@ -507,6 +559,23 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
     }
 
+    /**
+     * Broadcast-only state for live progress and wait prompts. The next durable transition uses a
+     * higher revision, while the checkpoint codec deliberately omits these ephemeral fields.
+     */
+    private fun publishEphemeral(transform: StmCoreState.() -> StmCoreState) {
+        if (!initializationComplete || checkpointPersistenceFailed.get() || serviceDestroyed) return
+        val nextRevision = nextCoreRevisionOrNull(state.revision) ?: return
+        val next = state.transform().copy(
+            revision = nextRevision,
+            updatedAtEpochMs = System.currentTimeMillis(),
+            processIdentity = processIdentity,
+            processId = Process.myPid(),
+        ).requireValidCoreSnapshot()
+        state = next
+        broadcastState(next)
+    }
+
     private fun commitPublishedState(next: StmCoreState): Boolean {
         if (checkpointPersistenceFailed.get() || serviceDestroyed) return false
         if (next.revision <= committedState.revision) return false
@@ -518,15 +587,36 @@ class StmCoreService : Service(), FeatherEngine.Callback {
 
     private fun broadcastCommittedState() {
         if (!initializationComplete || checkpointPersistenceFailed.get()) return
+        broadcastState(state)
+    }
+
+    private fun broadcastState(snapshot: StmCoreState) {
         val deadClients = mutableListOf<IBinder>()
         clients.forEach { (binder, client) ->
             try {
-                client.send(StmCoreProtocol.stateMessage(committedState))
+                client.send(StmCoreProtocol.stateMessage(snapshot))
             } catch (_: RemoteException) {
                 deadClients += binder
             }
         }
         deadClients.forEach(clients::remove)
+        deadClients.forEach(::removeClientDeathRecipient)
+        if (deadClients.isNotEmpty() && clients.isEmpty()) {
+            beginOwnerLossShutdown("The STM app process disconnected")
+        }
+    }
+
+    private fun broadcastAppTaskRemoved() {
+        val deadClients = mutableListOf<IBinder>()
+        clients.forEach { (binder, client) ->
+            try {
+                client.send(StmCoreProtocol.appTaskRemovedMessage())
+            } catch (_: RemoteException) {
+                deadClients += binder
+            }
+        }
+        deadClients.forEach(clients::remove)
+        deadClients.forEach(::removeClientDeathRecipient)
     }
 
     private fun handleCheckpointPersistenceFailure(revision: Long, error: Throwable) {
@@ -540,18 +630,47 @@ class StmCoreService : Service(), FeatherEngine.Callback {
 
     private fun registerClient(client: Messenger?) {
         if (client == null) return
-        clients[client.binder] = client
+        val binder = client.binder
+        val recipient = IBinder.DeathRecipient {
+            mainHandler.post {
+                clients.remove(binder)
+                removeClientDeathRecipient(binder)
+                if (clients.isEmpty()) {
+                    beginOwnerLossShutdown("The STM app process ended")
+                }
+            }
+        }
+        removeClientDeathRecipient(binder)
+        try {
+            binder.linkToDeath(recipient, 0)
+        } catch (_: RemoteException) {
+            beginOwnerLossShutdown("The STM app process ended before Core registration")
+            return
+        }
+        clientDeaths[binder] = recipient
+        clients[binder] = client
         if (!initializationComplete || checkpointPersistenceFailed.get()) return
         try {
-            client.send(StmCoreProtocol.stateMessage(committedState))
+            client.send(StmCoreProtocol.stateMessage(state))
         } catch (_: RemoteException) {
-            clients.remove(client.binder)
+            clients.remove(binder)
+            removeClientDeathRecipient(binder)
+            if (clients.isEmpty()) beginOwnerLossShutdown("The STM app process disconnected")
         }
     }
 
     private fun unregisterClient(client: Messenger?) {
         client ?: return
         clients.remove(client.binder)
+        removeClientDeathRecipient(client.binder)
+        if (clients.isEmpty()) {
+            beginOwnerLossShutdown("The STM app released its Core connection")
+        }
+    }
+
+    private fun removeClientDeathRecipient(binder: IBinder) {
+        val recipient = clientDeaths.remove(binder) ?: return
+        runCatching { binder.unlinkToDeath(recipient, 0) }
     }
 
     private fun handleIncomingMessage(message: Message): Boolean {
@@ -620,6 +739,26 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 true
             }
 
+            StmCoreProtocol.MESSAGE_VERIFY_SLOT -> {
+                handleVerifySlotMessage(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_CONTINUE_WAITING -> {
+                handleContinueWaitingMessage(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_RESTART_CORE -> {
+                handleRestartCoreMessage(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_CLOSE_CORE -> {
+                handleCloseCoreMessage(message)
+                true
+            }
+
             StmCoreProtocol.MESSAGE_IMPORT_ARTIFACT -> {
                 handleImportMessage(message, install = false)
                 true
@@ -659,6 +798,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 slotRevision = nextSlotRevision,
                 cacheFileName = request.cacheFileName,
                 requestedArtifact = request.artifact,
+                installMode = request.installMode,
             ),
         )
     }
@@ -726,6 +866,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     slotRevision = slotRevision,
                     source = source,
                     requestedArtifact = request.artifact,
+                    installMode = request.installMode,
                 )
             } else {
                 installerCoordinator.verifyImportedArtifact(
@@ -784,6 +925,177 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
     }
 
+    private fun handleContinueWaitingMessage(message: Message) {
+        val targetOperationId = StmCoreProtocol.targetIdFrom(message) ?: return
+        val prompt = state.waitPrompt ?: return
+        if (prompt.operationId != targetOperationId) return
+        if (prompt.kind == StmCoreWaitKind.SILLY_TAVERN_START) {
+            if (state.operationId != targetOperationId ||
+                state.runState != StmCoreRunState.STARTING
+            ) {
+                return
+            }
+            publishEphemeral { copy(waitPrompt = null) }
+            scheduleStartReminder(targetOperationId, prompt.intervalMillis)
+            return
+        }
+        installerCoordinator.continueWaiting(targetOperationId)
+    }
+
+    private fun handleRestartCoreMessage(message: Message) {
+        val operationId = StmCoreProtocol.operationIdFrom(message) ?: return
+        beginCoreShutdown(operationId, CoreShutdownMode.RESTART)
+    }
+
+    private fun handleCloseCoreMessage(message: Message) {
+        val operationId = StmCoreProtocol.operationIdFrom(message) ?: return
+        beginCoreShutdown(operationId, CoreShutdownMode.CLOSE)
+    }
+
+    private fun beginCoreShutdown(operationId: String, mode: CoreShutdownMode) {
+        if (shutdownMode != null || processTerminationScheduled) return
+        shutdownMode = mode
+        state.jobs.firstOrNull { it.state in ACTIVE_JOB_STATES }?.let { active ->
+            installerCoordinator.cancel(active.operationId)
+        }
+        publish(afterDurableCommit = {
+            if (state.runState == StmCoreRunState.STOPPED ||
+                state.runState == StmCoreRunState.CRASHED
+            ) {
+                maybeFinishCoreShutdown()
+            }
+        }) {
+            copy(
+                waitPrompt = null,
+                runtimeTransfer = null,
+                summary = if (mode == CoreShutdownMode.RESTART) {
+                    "Restarting STM Core; SillyTavern will remain stopped"
+                } else {
+                    "Closing STM Core"
+                },
+            )
+        }
+        when (state.runState) {
+            StmCoreRunState.STARTING,
+            StmCoreRunState.RUNNING,
+            -> stopCore(operationId)
+
+            StmCoreRunState.DRAINING -> Unit
+            StmCoreRunState.STOPPED,
+            StmCoreRunState.CRASHED,
+            -> Unit
+        }
+    }
+
+    private fun beginOwnerLossShutdown(reason: String) {
+        if (!initializationComplete || processTerminationScheduled || shutdownMode != null) return
+        val hasMaintenance = ::installerCoordinator.isInitialized &&
+            installerCoordinator.hasActiveOperation()
+        val hasLiveSession = state.runState == StmCoreRunState.STARTING ||
+            state.runState == StmCoreRunState.RUNNING ||
+            state.runState == StmCoreRunState.DRAINING
+        if (!hasMaintenance && !hasLiveSession) {
+            releaseSessionForeground()
+            stopSelf()
+            scheduleProcessTermination()
+            return
+        }
+        Log.i(TAG, "owner_lost; shutting down Core: $reason")
+        beginCoreShutdown(UUID.randomUUID().toString(), CoreShutdownMode.CLOSE)
+    }
+
+    private fun maybeFinishCoreShutdown() {
+        if (shutdownMode == null ||
+            processTerminationScheduled ||
+            (::installerCoordinator.isInitialized && installerCoordinator.hasActiveOperation()) ||
+            state.runState == StmCoreRunState.STARTING ||
+            state.runState == StmCoreRunState.RUNNING ||
+            state.runState == StmCoreRunState.DRAINING
+        ) {
+            return
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        foregroundActive = false
+        stopSelf()
+        scheduleProcessTermination()
+    }
+
+    private fun ensureSessionForeground(version: String? = null) {
+        createNotificationChannel()
+        val notification = sessionNotification(version)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        foregroundActive = true
+    }
+
+    private fun updateSessionForeground(version: String?) {
+        if (!foregroundActive) {
+            ensureSessionForeground(version)
+            return
+        }
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, sessionNotification(version))
+    }
+
+    private fun releaseSessionForeground() {
+        if (!foregroundActive) return
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        foregroundActive = false
+    }
+
+    private fun createNotificationChannel() {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(NOTIFICATION_CHANNEL_ID) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "SillyTavern runtime",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "Visible while the user keeps SillyTavern running locally"
+                setShowBadge(false)
+            },
+        )
+    }
+
+    private fun sessionNotification(version: String?): Notification {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val contentIntent = launchIntent?.let {
+            PendingIntent.getActivity(
+                this,
+                0,
+                it.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+        val text = version?.takeIf(String::isNotBlank)?.let {
+            "Running SillyTavern $it"
+        } ?: "Starting SillyTavern"
+        return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stm_core_notification)
+            .setContentTitle("SillyTavern Manager")
+            .setContentText(text)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(contentIntent)
+            .build()
+    }
+
+    private fun StmCoreState.runningSillyTavernVersion(): String? {
+        val running = runningSlot ?: return null
+        return slots.singleOrNull {
+            it.id == running.slotId && it.revision == running.slotRevision
+        }?.artifact?.stVersion
+    }
+
     private fun handleActivateMessage(message: Message) {
         val operationId = StmCoreProtocol.operationIdFrom(message) ?: return
         val targetId = StmCoreProtocol.targetIdFrom(message) ?: REQUEST_TARGET
@@ -838,6 +1150,43 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             StmCoreJobType.REMOVE,
             targetId,
             installerCoordinator.remove(operationId, target, state.activeSlot, state.runningSlot),
+        )
+    }
+
+    private fun handleVerifySlotMessage(message: Message) {
+        val operationId = StmCoreProtocol.operationIdFrom(message) ?: return
+        val targetId = StmCoreProtocol.targetIdFrom(message) ?: REQUEST_TARGET
+        if (!maintenanceAllowed(operationId, StmCoreJobType.VERIFY, targetId)) return
+        if (state.runState != StmCoreRunState.STOPPED) {
+            publishMaintenanceRejection(
+                operationId,
+                StmCoreJobType.VERIFY,
+                targetId,
+                "CORE_NOT_STOPPED",
+                "Full slot verification requires SillyTavern to be stopped",
+            )
+            return
+        }
+        val target = state.slots.singleOrNull { it.id == targetId }
+        if (target == null) {
+            publishMaintenanceRejection(
+                operationId,
+                StmCoreJobType.VERIFY,
+                targetId,
+                "SLOT_MISSING",
+                "The requested slot is not present in the Core snapshot",
+            )
+            return
+        }
+        handleSubmission(
+            operationId,
+            StmCoreJobType.VERIFY,
+            targetId,
+            installerCoordinator.verifySlot(
+                operationId = operationId,
+                target = target,
+                markBrokenOnFailure = state.activeSlot?.slotId != targetId,
+            ),
         )
     }
 
@@ -932,7 +1281,11 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     private fun applyInstallerEvent(event: StmInstallerEvent) {
         logInstallerEvent(event)
         when (event) {
-            is StmInstallerEvent.JobChanged -> publish {
+            is StmInstallerEvent.JobChanged -> publish(
+                afterDurableCommit = {
+                    if (event.job.state !in ACTIVE_JOB_STATES) maybeFinishCoreShutdown()
+                },
+            ) {
                 copy(
                     jobs = jobs.upsertJob(event.job),
                     summary = "Core ${event.job.type.name.lowercase()} job is " +
@@ -1003,6 +1356,14 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             is StmInstallerEvent.RecoveryEvidence -> recordRecoveryEvidence(event.error)
 
             is StmInstallerEvent.RecoveryComplete -> completeInstallerRecovery(event.successful)
+
+            is StmInstallerEvent.WaitPromptChanged -> publishEphemeral {
+                copy(waitPrompt = event.prompt)
+            }
+
+            is StmInstallerEvent.RuntimeTransferChanged -> publishEphemeral {
+                copy(runtimeTransfer = event.progress)
+            }
 
             is StmInstallerEvent.ArtifactVerified -> Unit
         }
@@ -1075,6 +1436,23 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 TAG,
                 "installer_recovery_complete successful=${event.successful}",
             )
+
+            is StmInstallerEvent.WaitPromptChanged -> Log.i(
+                TAG,
+                "wait_prompt operation=${event.prompt?.operationId.orEmpty()} " +
+                    "kind=${event.prompt?.kind?.name.orEmpty()}",
+            )
+
+            is StmInstallerEvent.RuntimeTransferChanged -> {
+                val progress = event.progress
+                if (progress == null || progress.transferredBytes == progress.totalBytes) {
+                    Log.i(
+                        TAG,
+                        "runtime_transfer operation=${progress?.operationId.orEmpty()} " +
+                            "bytes=${progress?.transferredBytes ?: 0}",
+                    )
+                }
+            }
 
             is StmInstallerEvent.ArtifactVerified -> {
                 val artifact = event.artifact
@@ -1285,6 +1663,30 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         watchdog = Runnable(action).also { mainHandler.postDelayed(it, delayMillis) }
     }
 
+    private fun scheduleStartReminder(operationId: String, intervalMillis: Long) {
+        cancelWatchdog()
+        watchdog = Runnable {
+            watchdog = null
+            if (state.operationId != operationId ||
+                state.runState != StmCoreRunState.STARTING ||
+                state.workload != StmCoreWorkload.SILLY_TAVERN
+            ) {
+                return@Runnable
+            }
+            publishEphemeral {
+                copy(
+                    waitPrompt = StmCoreWaitPrompt(
+                        operationId = operationId,
+                        kind = StmCoreWaitKind.SILLY_TAVERN_START,
+                        intervalMillis = intervalMillis,
+                        triggeredAtEpochMs = System.currentTimeMillis(),
+                        summary = "SillyTavern has not passed its local health check. Plugins, configuration, or a busy device may be delaying startup.",
+                    ),
+                )
+            }
+        }.also { mainHandler.postDelayed(it, intervalMillis) }
+    }
+
     private fun cancelWatchdog() {
         watchdog?.let(mainHandler::removeCallbacks)
         watchdog = null
@@ -1308,7 +1710,12 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         if (snapshot.runState == StmCoreRunState.CRASHED) Log.e(TAG, message) else Log.i(TAG, message)
     }
 
-    private companion object {
+    private enum class CoreShutdownMode {
+        RESTART,
+        CLOSE,
+    }
+
+    internal companion object {
         const val TAG = "StmCore"
         const val REQUEST_TARGET = "request"
         const val ACTIVE_TARGET = "active"
@@ -1320,15 +1727,28 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         const val DEBUG_INSTALLER_FAULT_BRIDGE =
             "io.github.styx798.sillytavernmanager.stmcore.testing.StmInstallerDebugFaultBridge"
         const val START_TIMEOUT_MILLIS = 15_000L
-        const val SILLY_TAVERN_START_TIMEOUT_MILLIS = 30_000L
+        const val SILLY_TAVERN_START_TIMEOUT_MILLIS = 15_000L
         const val GRACEFUL_STOP_TIMEOUT_MILLIS = 15_000L
-        const val TERMINATE_TIMEOUT_MILLIS = 1_500L
+        const val TERMINATE_TIMEOUT_MILLIS = 3_000L
         const val PROCESS_EXIT_GRACE_MILLIS = 200L
+        const val ACTION_PREPARE_SILLY_TAVERN =
+            "io.github.styx798.sillytavernmanager.stmcore.action.PREPARE_SILLY_TAVERN"
+        const val ACTION_MARK_APP_TASK_OWNED =
+            "io.github.styx798.sillytavernmanager.stmcore.action.MARK_APP_TASK_OWNED"
+        const val ACTION_PREPARE_CORE_SHUTDOWN =
+            "io.github.styx798.sillytavernmanager.stmcore.action.PREPARE_CORE_SHUTDOWN"
+        const val ACTION_RELEASE_SILLY_TAVERN_FOREGROUND =
+            "io.github.styx798.sillytavernmanager.stmcore.action.RELEASE_SILLY_TAVERN_FOREGROUND"
+        const val NOTIFICATION_CHANNEL_ID = "stm_silly_tavern_runtime"
+        const val NOTIFICATION_ID = 0x53544d
         val ACTIVE_JOB_STATES = setOf(
             StmCoreJobState.QUEUED,
             StmCoreJobState.RUNNING,
             StmCoreJobState.CANCELLING,
         )
+
+        fun serviceIntent(context: Context, action: String): Intent =
+            Intent(context, StmCoreService::class.java).setAction(action)
     }
 }
 

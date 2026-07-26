@@ -9,6 +9,8 @@ import com.caoccao.javet.interop.NodeRuntime
 import io.github.styx798.sillytavernmanager.stmcore.FeatherEngine
 import io.github.styx798.sillytavernmanager.stmcore.LoopbackHealthProbe
 import io.github.styx798.sillytavernmanager.stmcore.LoopbackProbeResult
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import io.github.styx798.sillytavernmanager.stmcore.StmNodeRuntimeFactory
 import io.github.styx798.sillytavernmanager.stmcore.StmSillyTavernLaunchFactory
 import java.io.ByteArrayOutputStream
@@ -55,7 +57,44 @@ internal data class StmRuntimeSlotPreparationRequest(
     val commitSha: String,
     val stVersion: String,
     val packageLockSha256: String,
+    val installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+    val sourceEntries: List<StmZipManifestEntry> = emptyList(),
+    val observer: StmRuntimePreparationObserver = StmRuntimePreparationObserver.NONE,
 )
+
+internal interface StmRuntimePreparationObserver {
+    fun beginSoftWait(kind: StmCoreWaitKind, intervalMillis: Long, summary: String)
+
+    fun pollSoftWait()
+
+    fun endSoftWait()
+
+    fun onRuntimeTransfer(transferredBytes: Long, totalBytes: Long, bytesPerSecond: Long)
+
+    fun endRuntimeTransfer()
+
+    companion object {
+        val NONE = object : StmRuntimePreparationObserver {
+            override fun beginSoftWait(
+                kind: StmCoreWaitKind,
+                intervalMillis: Long,
+                summary: String,
+            ) = Unit
+
+            override fun pollSoftWait() = Unit
+
+            override fun endSoftWait() = Unit
+
+            override fun onRuntimeTransfer(
+                transferredBytes: Long,
+                totalBytes: Long,
+                bytesPerSecond: Long,
+            ) = Unit
+
+            override fun endRuntimeTransfer() = Unit
+        }
+    }
+}
 
 internal enum class StmRuntimeSlotPreparationErrorCode {
     OPERATION_CANCELLED,
@@ -65,6 +104,8 @@ internal enum class StmRuntimeSlotPreparationErrorCode {
     BUNDLE_BUILD_FAILED,
     RUNTIME_ASSEMBLY_FAILED,
     RUNNABLE_ACCEPTANCE_FAILED,
+    PREBUILT_RUNTIME_NOT_AVAILABLE,
+    PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE,
     PREBUILT_RUNTIME_REJECTED,
     PREBUILT_RUNTIME_INTEGRATION_FAILED,
 }
@@ -89,7 +130,13 @@ internal fun interface StmRuntimeSlotRunnableAcceptor {
         request: StmRuntimeSlotPreparationRequest,
         expectedBundle: StmRuntimeFileBinding,
         cancellation: StmExtractionCancellation,
+        programPolicy: StmRunnableAcceptanceProgramPolicy,
     )
+}
+
+internal enum class StmRunnableAcceptanceProgramPolicy {
+    STRICT_TREE_UNCHANGED,
+    SIGNED_ARCHIVE_BOUND,
 }
 
 private val STM_WEBPACK_CACHE_VERSION_PATTERN = Regex("^[0-9a-f]{16}$")
@@ -156,6 +203,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
                 cache = cache,
                 temporary = temporary,
                 cancellation = cancellation,
+                observer = request.observer,
             )
         } catch (error: Exception) {
             throw mappedFailure(
@@ -192,6 +240,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
                 operationId = request.operationId,
                 npmRuntimeNonce = npmResult.runtimeNonce,
                 cancellation = cancellation,
+                observer = request.observer,
             )
         } catch (error: Exception) {
             throw mappedFailure(
@@ -234,6 +283,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
                 operation = operation,
                 expectedBundle = runtime.bundleBinding,
                 cancellation = cancellation,
+                programPolicy = StmRunnableAcceptanceProgramPolicy.STRICT_TREE_UNCHANGED,
             )
         } catch (error: Exception) {
             throw mappedFailure(
@@ -270,6 +320,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
         request: StmRuntimeSlotPreparationRequest,
         expectedBundle: StmRuntimeFileBinding,
         cancellation: StmExtractionCancellation,
+        programPolicy: StmRunnableAcceptanceProgramPolicy,
     ) {
         val operation = requireDirectory(request.operationRoot.toPath(), "installer operation")
         val payload = requireDirectory(request.payloadDirectory.toPath(), "source payload")
@@ -286,6 +337,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
             operation = operation,
             expectedBundle = expectedBundle,
             cancellation = cancellation,
+            programPolicy = programPolicy,
         )
     }
 
@@ -295,6 +347,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
         cache: Path,
         temporary: Path,
         cancellation: StmExtractionCancellation,
+        observer: StmRuntimePreparationObserver,
     ): NpmInstallResult {
         requireRegular(npmRoot.resolve("bin/npm-cli.js"), "npm CLI executable entry")
         requireRegular(npmRoot.resolve("lib/cli.js"), "npm CLI JavaScript entry")
@@ -303,6 +356,11 @@ internal class StmDeviceLocalNpmSlotPreparer(
         val started = SystemClock.elapsedRealtime()
         var primaryFailure: Throwable? = null
         try {
+            observer.beginSoftWait(
+                StmCoreWaitKind.NPM_INSTALL,
+                npmTimeoutMillis,
+                "npm is still installing many small dependency files. Check network and storage activity.",
+            )
             runtime.getExecutor(
                 npmBootstrap(
                     npmRoot = npmRoot,
@@ -315,9 +373,8 @@ internal class StmDeviceLocalNpmSlotPreparer(
             awaitJavascriptCompletion(
                 runtime = runtime,
                 doneExpression = "Boolean(globalThis.__stmNpmInstall?.done)",
-                timeoutMillis = npmTimeoutMillis,
                 cancellation = cancellation,
-                timeoutMessage = "npm CLI exceeded its installation time budget",
+                observer = observer,
             )
             val error = runtime.getExecutor(
                 "String(globalThis.__stmNpmInstall?.error || '')",
@@ -347,6 +404,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
             primaryFailure = error
             throw error
         } finally {
+            observer.endSoftWait()
             closeInstallerRuntime(runtime, npmRestorationScript(), primaryFailure)
         }
     }
@@ -356,6 +414,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
         operationId: String,
         npmRuntimeNonce: String,
         cancellation: StmExtractionCancellation,
+        observer: StmRuntimePreparationObserver,
     ): LocalBundleResult {
         val publicLib = requireRegular(program.resolve("public/lib.js"), "public/lib.js")
         val webpackConfig = requireRegular(program.resolve("webpack.config.js"), "webpack.config.js")
@@ -381,6 +440,11 @@ internal class StmDeviceLocalNpmSlotPreparer(
         val started = SystemClock.elapsedRealtime()
         var primaryFailure: Throwable? = null
         try {
+            observer.beginSoftWait(
+                StmCoreWaitKind.BUNDLE_BUILD,
+                bundleTimeoutMillis,
+                "The device-local lib.js build is still running. Slow storage or memory pressure may be delaying Webpack.",
+            )
             val nodeVersion = runtime.getExecutor("process.version").executeString().orEmpty()
             runtime.getExecutor(
                 bundleBootstrap(
@@ -393,9 +457,8 @@ internal class StmDeviceLocalNpmSlotPreparer(
             awaitJavascriptCompletion(
                 runtime = runtime,
                 doneExpression = "Boolean(globalThis.__stmLocalBundle?.done)",
-                timeoutMillis = bundleTimeoutMillis,
                 cancellation = cancellation,
-                timeoutMessage = "Device-local lib.js build exceeded its time budget",
+                observer = observer,
             )
             val error = runtime.getExecutor(
                 "String(globalThis.__stmLocalBundle?.error || '')",
@@ -477,6 +540,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
             primaryFailure = error
             throw error
         } finally {
+            observer.endSoftWait()
             closeInstallerRuntime(runtime, bundleRestorationScript(), primaryFailure)
         }
     }
@@ -569,12 +633,17 @@ internal class StmDeviceLocalNpmSlotPreparer(
         operation: Path,
         expectedBundle: StmRuntimeFileBinding,
         cancellation: StmExtractionCancellation,
+        programPolicy: StmRunnableAcceptanceProgramPolicy,
     ): RunnableAcceptance {
         throwIfCancelled(cancellation)
         val data = freshDirectory(operation, ACCEPTANCE_DATA_DIRECTORY)
         val session = freshDirectory(operation, ACCEPTANCE_SESSION_DIRECTORY)
         val logs = freshDirectory(operation, ACCEPTANCE_LOGS_DIRECTORY)
-        val programBefore = scanTree(program, false, "", cancellation).sha256
+        val programBefore = when (programPolicy) {
+            StmRunnableAcceptanceProgramPolicy.STRICT_TREE_UNCHANGED ->
+                scanTree(program, false, "", cancellation).sha256
+            StmRunnableAcceptanceProgramPolicy.SIGNED_ARCHIVE_BOUND -> null
+        }
         val prepared = StmSillyTavernLaunchFactory.prepare(
             slotRoot = payload.toFile(),
             archiveRoot = request.archiveRoot,
@@ -591,9 +660,16 @@ internal class StmDeviceLocalNpmSlotPreparer(
         var port = 0
         var stopElapsed = 0L
         try {
-            engine.start(sessionId, session.toFile(), prepared.launchSpec)
-            awaitLatch(signal.ready, START_TIMEOUT_MILLIS, cancellation) {
-                "Timed out waiting for staged SillyTavern READY"
+            request.observer.beginSoftWait(
+                StmCoreWaitKind.RUNNABLE_ACCEPTANCE,
+                START_TIMEOUT_MILLIS,
+                "The staged SillyTavern process has not become healthy yet. Startup may be delayed or blocked.",
+            )
+            try {
+                engine.start(sessionId, session.toFile(), prepared.launchSpec)
+                awaitSoftLatch(signal.ready, cancellation, request.observer)
+            } finally {
+                request.observer.endSoftWait()
             }
             signal.failure?.let { error(it) }
             port = signal.port
@@ -652,8 +728,17 @@ internal class StmDeviceLocalNpmSlotPreparer(
                     "Staged SillyTavern loopback port remained open"
                 }
             }
-            check(scanTree(program, false, "", StmExtractionCancellation.NONE).sha256 == programBefore) {
-                "Staged program changed during runnable acceptance"
+            if (programBefore != null) {
+                check(
+                    scanTree(
+                        program,
+                        false,
+                        "",
+                        StmExtractionCancellation.NONE,
+                    ).sha256 == programBefore,
+                ) {
+                    "Staged program changed during runnable acceptance"
+                }
             }
             check(!Files.exists(data.resolve("_webpack"), LinkOption.NOFOLLOW_LINKS)) {
                 "Runtime created a forbidden Webpack cache"
@@ -758,12 +843,10 @@ internal class StmDeviceLocalNpmSlotPreparer(
     private fun awaitJavascriptCompletion(
         runtime: NodeRuntime,
         doneExpression: String,
-        timeoutMillis: Long,
         cancellation: StmExtractionCancellation,
-        timeoutMessage: String,
+        observer: StmRuntimePreparationObserver,
     ) {
-        val deadline = SystemClock.elapsedRealtime() + timeoutMillis
-        while (SystemClock.elapsedRealtime() < deadline) {
+        while (true) {
             if (cancellation.isCancelled()) {
                 runCatching {
                     runtime.terminateExecution(V8RuntimeTerminationMode.Synchronous)
@@ -775,10 +858,9 @@ internal class StmDeviceLocalNpmSlotPreparer(
             }
             runtime.await(V8AwaitMode.RunNoWait)
             if (runtime.getExecutor(doneExpression).executeBoolean()) return
+            observer.pollSoftWait()
             Thread.sleep(EVENT_LOOP_POLL_MILLIS)
         }
-        runCatching { runtime.terminateExecution(V8RuntimeTerminationMode.Synchronous) }
-        error(timeoutMessage)
     }
 
     private fun closeInstallerRuntime(
@@ -1426,6 +1508,18 @@ internal class StmDeviceLocalNpmSlotPreparer(
         error(timeoutMessage())
     }
 
+    private fun awaitSoftLatch(
+        latch: CountDownLatch,
+        cancellation: StmExtractionCancellation,
+        observer: StmRuntimePreparationObserver,
+    ) {
+        while (true) {
+            throwIfCancelled(cancellation)
+            if (latch.await(100, TimeUnit.MILLISECONDS)) return
+            observer.pollSoftWait()
+        }
+    }
+
     private fun awaitPortReleased(port: Int): Boolean {
         val deadline = SystemClock.elapsedRealtime() + PORT_RELEASE_TIMEOUT_MILLIS
         while (SystemClock.elapsedRealtime() < deadline) {
@@ -1710,11 +1804,11 @@ internal class StmDeviceLocalNpmSlotPreparer(
         const val ACCEPTANCE_SESSION_DIRECTORY = "acceptance-session"
         const val ACCEPTANCE_LOGS_DIRECTORY = "acceptance-logs"
         const val NPM_REGISTRY = "https://registry.npmjs.org/"
-        const val NPM_TIMEOUT_MILLIS = 20L * 60L * 1000L
-        const val BUNDLE_TIMEOUT_MILLIS = 15L * 60L * 1000L
-        const val START_TIMEOUT_MILLIS = 4L * 60L * 1000L
-        const val STOP_TIMEOUT_MILLIS = 20_000L
-        const val ENGINE_DESTROY_TIMEOUT_SECONDS = 15L
+        const val NPM_TIMEOUT_MILLIS = 5L * 60L * 1000L
+        const val BUNDLE_TIMEOUT_MILLIS = 2L * 60L * 1000L
+        const val START_TIMEOUT_MILLIS = 20_000L
+        const val STOP_TIMEOUT_MILLIS = 10_000L
+        const val ENGINE_DESTROY_TIMEOUT_SECONDS = 10L
         const val EVENT_LOOP_POLL_MILLIS = 10L
         const val PORT_RELEASE_TIMEOUT_MILLIS = 5_000L
         const val HTTP_TIMEOUT_MILLIS = 10_000

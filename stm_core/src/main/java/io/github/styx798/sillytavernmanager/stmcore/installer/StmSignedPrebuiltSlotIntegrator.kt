@@ -42,6 +42,7 @@ internal class StmSignedPrebuiltSlotIntegrator(
         dependencyExtractionRoot: File,
         expectedSource: StmDependencySourceBinding,
         expectedRuntime: StmDependencyRuntimeBinding,
+        sourceEntries: List<StmZipManifestEntry> = emptyList(),
         cancellation: StmExtractionCancellation = StmExtractionCancellation.NONE,
     ): StmSignedPrebuiltIntegrationResult {
         val payload = requireRealDirectory(payloadDirectory, "Source payload")
@@ -83,32 +84,21 @@ internal class StmSignedPrebuiltSlotIntegrator(
         verifySupplySidecars(supply, manifest)
 
         val archive = supply.resolve(DEPENDENCIES_ARCHIVE_FILE)
-        requirePayload(
-            archive,
-            manifest.dependenciesArchiveBytes,
-            manifest.dependenciesArchiveSha256,
-            MAX_ARCHIVE_BYTES,
-        )
+        requireBoundPayloadSize(archive, manifest.dependenciesArchiveBytes, MAX_ARCHIVE_BYTES)
         cancellation.throwIfRequested()
 
-        val extraction = zipExtractor.extract(
-            artifact = archive.toFile(),
-            operationStagingRoot = dependencyOperation.toFile(),
-            cancellation = cancellation,
-        )
-        requireExtractedTree(extraction, manifest)
         val expectedTreeManifest = readBoundedRegularFile(
             supply.resolve(TREE_MANIFEST_FILE),
             MAX_TREE_MANIFEST_BYTES,
         )
-        check(
-            MessageDigest.isEqual(
-                expectedTreeManifest,
-                encodeTreeManifest(extraction),
-            ),
-        ) {
-            "Extracted dependency tree did not match the signed tree manifest"
-        }
+        val signedDependencyEntries = parseTreeManifest(expectedTreeManifest)
+        val extraction = zipExtractor.extract(
+            artifact = archive.toFile(),
+            operationStagingRoot = dependencyOperation.toFile(),
+            cancellation = cancellation,
+            mode = StmZipExtractionMode.SIGNED_ARCHIVE_FAST,
+        )
+        requireExtractedTree(extraction, signedDependencyEntries, manifest)
 
         val extractedNodeModules = extraction.payloadDirectory.toPath().resolve(NODE_MODULES)
         val installedNodeModules = program.resolve(NODE_MODULES)
@@ -140,7 +130,25 @@ internal class StmSignedPrebuiltSlotIntegrator(
             )
         }
 
-        val programIdentity = scanTreeIdentity(program, cancellation)
+        val preparedSlotEntries = buildPreparedSlotEntries(
+            archiveRoot = archiveRoot,
+            sourceEntries = sourceEntries,
+            dependencyEntries = signedDependencyEntries,
+            runtimeBindings = runtimeBindings,
+        )
+        val programIdentity = stmTreeIdentitySha256(
+            preparedSlotEntries
+                .asSequence()
+                .filter { entry ->
+                    entry.relativePath.startsWith("$archiveRoot/")
+                }
+                .map { entry ->
+                    entry.toZipManifestEntry(
+                        entry.relativePath.removePrefix("$archiveRoot/"),
+                    )
+                }
+                .toList(),
+        )
         check(programIdentity == manifest.postAdapterProgramTreeSha256) {
             "Assembled program tree identity $programIdentity did not match signed identity " +
                 manifest.postAdapterProgramTreeSha256
@@ -152,11 +160,12 @@ internal class StmSignedPrebuiltSlotIntegrator(
             dependencyTreeSha256 = manifest.dependencyTreeSha256,
             postAdapterProgramTreeSha256 = manifest.postAdapterProgramTreeSha256,
             runtimeFiles = runtimeBindings,
+            preparedSlotEntries = preparedSlotEntries,
         )
         return StmSignedPrebuiltIntegrationResult(
             manifest = manifest,
             canonicalManifestSha256 = verification.canonicalSha256,
-            dependencyTreeSha256 = extraction.manifestSha256,
+            dependencyTreeSha256 = manifest.dependencyTreeSha256,
             postAdapterProgramTreeSha256 = programIdentity,
             runtimeEvidence = runtimeEvidence,
         )
@@ -344,13 +353,13 @@ internal class StmSignedPrebuiltSlotIntegrator(
 
     private fun requireExtractedTree(
         extraction: StmZipExtractionResult,
+        signedEntries: List<StmZipManifestEntry>,
         manifest: StmDependencySupplyManifest,
     ) {
         check(
             extraction.fileCount == manifest.dependencyTreeFileCount &&
                 extraction.directoryCount == manifest.dependencyTreeDirectoryCount &&
-                extraction.totalFileBytes == manifest.dependencyTreeBytes &&
-                extraction.manifestSha256 == manifest.dependencyTreeSha256,
+                extraction.totalFileBytes == manifest.dependencyTreeBytes,
         ) {
             "Extracted dependency tree did not match the signed manifest"
         }
@@ -362,6 +371,150 @@ internal class StmSignedPrebuiltSlotIntegrator(
         ) {
             "Dependency archive contains data outside node_modules"
         }
+        val extractedStructure = extraction.entries.map { entry ->
+            Triple(entry.relativePath, entry.type, entry.sizeBytes)
+        }
+        val signedStructure = signedEntries.map { entry ->
+            Triple(entry.relativePath, entry.type, entry.sizeBytes)
+        }
+        check(extractedStructure == signedStructure) {
+            "Extracted dependency structure did not match the signed tree manifest"
+        }
+        check(stmTreeIdentitySha256(signedEntries) == manifest.dependencyTreeSha256) {
+            "Signed dependency tree manifest identity did not match its signed metadata"
+        }
+    }
+
+    private fun parseTreeManifest(bytes: ByteArray): List<StmZipManifestEntry> {
+        val text = bytes.toString(StandardCharsets.UTF_8)
+        check(text.toByteArray(StandardCharsets.UTF_8).contentEquals(bytes)) {
+            "Signed dependency tree manifest is not canonical UTF-8"
+        }
+        val lines = text.split('\n')
+        check(lines.firstOrNull() == TREE_MANIFEST_MAGIC && lines.lastOrNull().isNullOrEmpty()) {
+            "Signed dependency tree manifest framing is invalid"
+        }
+        var previousPath: String? = null
+        val entries = lines.drop(1).dropLast(1).map { line ->
+            val fields = line.split('\t')
+            val entry = when (fields.firstOrNull()) {
+                "D" -> {
+                    check(fields.size == 2) { "Signed tree directory record is invalid" }
+                    StmZipManifestEntry(
+                        relativePath = fields[1],
+                        type = StmZipManifestEntryType.DIRECTORY,
+                        sizeBytes = 0,
+                        sha256 = null,
+                    )
+                }
+
+                "F" -> {
+                    check(fields.size == 4) { "Signed tree file record is invalid" }
+                    val size = fields[2].toLongOrNull()
+                    check(size != null && size >= 0) { "Signed tree file size is invalid" }
+                    check(LOWERCASE_SHA256_PATTERN.matches(fields[3])) {
+                        "Signed tree file SHA-256 is invalid"
+                    }
+                    StmZipManifestEntry(
+                        relativePath = fields[1],
+                        type = StmZipManifestEntryType.FILE,
+                        sizeBytes = size,
+                        sha256 = fields[3],
+                    )
+                }
+
+                else -> error("Signed dependency tree record type is invalid")
+            }
+            check(
+                entry.relativePath == NODE_MODULES ||
+                    entry.relativePath.startsWith("$NODE_MODULES/")
+            ) {
+                "Signed dependency tree contains data outside node_modules"
+            }
+            check(previousPath == null || requireNotNull(previousPath) < entry.relativePath) {
+                "Signed dependency tree paths are not strictly sorted"
+            }
+            previousPath = entry.relativePath
+            entry
+        }
+        check(entries.isNotEmpty()) { "Signed dependency tree manifest is empty" }
+        return entries
+    }
+
+    private fun buildPreparedSlotEntries(
+        archiveRoot: String,
+        sourceEntries: List<StmZipManifestEntry>,
+        dependencyEntries: List<StmZipManifestEntry>,
+        runtimeBindings: Map<String, StmRuntimeFileBinding>,
+    ): List<StmSlotManifestEntry> {
+        check(sourceEntries.isNotEmpty()) {
+            "Signed runtime preparation is missing source extraction evidence"
+        }
+        val entries = linkedMapOf<String, StmSlotManifestEntry>()
+        fun add(entry: StmSlotManifestEntry) {
+            check(entries.putIfAbsent(entry.relativePath, entry) == null) {
+                "Prepared slot evidence contains a duplicate path"
+            }
+        }
+
+        sourceEntries.forEach { source ->
+            check(
+                source.relativePath == archiveRoot ||
+                    source.relativePath.startsWith("$archiveRoot/")
+            ) {
+                "Source extraction evidence escaped the bound archive root"
+            }
+            val isAdapter = source.relativePath == "$archiveRoot/$ADAPTER_RELATIVE_PATH"
+            val adapterBinding = runtimeBindings[ADAPTER_FILE]
+            add(
+                StmSlotManifestEntry(
+                    relativePath = source.relativePath,
+                    type = source.type.toSlotManifestType(),
+                    bytes = if (isAdapter) requireNotNull(adapterBinding).bytes else source.sizeBytes,
+                    fileSha256 = if (isAdapter) {
+                        requireNotNull(adapterBinding).sha256
+                    } else {
+                        source.sha256
+                    },
+                ),
+            )
+        }
+        dependencyEntries.forEach { dependency ->
+            add(
+                StmSlotManifestEntry(
+                    relativePath = "$archiveRoot/${dependency.relativePath}",
+                    type = dependency.type.toSlotManifestType(),
+                    bytes = dependency.sizeBytes,
+                    fileSha256 = dependency.sha256,
+                ),
+            )
+        }
+        add(
+            StmSlotManifestEntry(
+                relativePath = RUNTIME_DIRECTORY,
+                type = StmSlotManifestEntryType.DIRECTORY,
+                bytes = 0,
+                fileSha256 = null,
+            ),
+        )
+        runtimeBindings.toSortedMap().forEach { (name, binding) ->
+            add(
+                StmSlotManifestEntry(
+                    relativePath = "$RUNTIME_DIRECTORY/$name",
+                    type = StmSlotManifestEntryType.FILE,
+                    bytes = binding.bytes,
+                    fileSha256 = binding.sha256,
+                ),
+            )
+        }
+        val sorted = entries.values.sortedBy(StmSlotManifestEntry::relativePath)
+        check(sorted.all { entry ->
+            entry.type == StmSlotManifestEntryType.DIRECTORY ||
+                entry.fileSha256?.matches(LOWERCASE_SHA256_PATTERN) == true
+        }) {
+            "Prepared slot evidence is missing a file identity"
+        }
+        return sorted
     }
 
     private fun replaceWebpackAdapter(program: Path, verifiedAdapter: Path) {
@@ -404,49 +557,15 @@ internal class StmSignedPrebuiltSlotIntegrator(
         }
     }
 
-    private fun scanTreeIdentity(
-        root: Path,
-        cancellation: StmExtractionCancellation,
-    ): String {
-        val realRoot = requireRealDirectory(root.toFile(), "Assembled program")
-        val entries = mutableListOf<StmZipManifestEntry>()
-        Files.walkFileTree(realRoot, object : SimpleFileVisitor<Path>() {
-            override fun preVisitDirectory(
-                directory: Path,
-                attributes: BasicFileAttributes,
-            ): FileVisitResult {
-                cancellation.throwIfRequested()
-                if (directory == realRoot) return FileVisitResult.CONTINUE
-                check(attributes.isDirectory && !attributes.isSymbolicLink) {
-                    "Assembled program contains an unsafe directory"
-                }
-                entries += StmZipManifestEntry(
-                    relativePath = manifestPath(realRoot.relativize(directory)),
-                    type = StmZipManifestEntryType.DIRECTORY,
-                    sizeBytes = 0,
-                    sha256 = null,
-                )
-                return FileVisitResult.CONTINUE
-            }
-
-            override fun visitFile(
-                file: Path,
-                attributes: BasicFileAttributes,
-            ): FileVisitResult {
-                cancellation.throwIfRequested()
-                check(attributes.isRegularFile && !attributes.isSymbolicLink) {
-                    "Assembled program contains a symbolic link or special file"
-                }
-                entries += StmZipManifestEntry(
-                    relativePath = manifestPath(realRoot.relativize(file)),
-                    type = StmZipManifestEntryType.FILE,
-                    sizeBytes = attributes.size(),
-                    sha256 = sha256(file),
-                )
-                return FileVisitResult.CONTINUE
-            }
-        })
-        return stmTreeIdentitySha256(entries.sortedBy(StmZipManifestEntry::relativePath))
+    private fun requireBoundPayloadSize(file: Path, expectedBytes: Long, maximumBytes: Long) {
+        check(
+            !Files.isSymbolicLink(file) &&
+                Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) &&
+                Files.size(file) == expectedBytes &&
+                expectedBytes in 1..maximumBytes
+        ) {
+            "Signed archive payload length or type is invalid"
+        }
     }
 
     private fun requirePayload(
@@ -478,29 +597,6 @@ internal class StmSignedPrebuiltSlotIntegrator(
         }
         return Files.readAllBytes(file)
     }
-
-    private fun encodeTreeManifest(extraction: StmZipExtractionResult): ByteArray =
-        buildString {
-            append(TREE_MANIFEST_MAGIC)
-            append('\n')
-            extraction.entries.forEach { entry ->
-                when (entry.type) {
-                    StmZipManifestEntryType.DIRECTORY -> {
-                        append("D\t").append(entry.relativePath).append('\n')
-                    }
-
-                    StmZipManifestEntryType.FILE -> {
-                        append("F\t")
-                            .append(entry.relativePath)
-                            .append('\t')
-                            .append(entry.sizeBytes)
-                            .append('\t')
-                            .append(entry.sha256)
-                            .append('\n')
-                    }
-                }
-            }
-        }.toByteArray(StandardCharsets.UTF_8)
 
     private fun requireRealDirectory(input: File, label: String): Path {
         val path = input.toPath().toAbsolutePath().normalize()
@@ -558,9 +654,6 @@ internal class StmSignedPrebuiltSlotIntegrator(
             )
         }
     }
-
-    private fun manifestPath(path: Path): String =
-        (0 until path.nameCount).joinToString("/") { index -> path.getName(index).toString() }
 
     private fun sha256(path: Path): String = sha256Bytes(path).toHex()
 
@@ -644,3 +737,21 @@ internal class StmSignedPrebuiltSlotIntegrator(
         val LOWERCASE_SHA256_PATTERN = Regex("^[0-9a-f]{64}$")
     }
 }
+
+private fun StmZipManifestEntryType.toSlotManifestType(): StmSlotManifestEntryType =
+    when (this) {
+        StmZipManifestEntryType.DIRECTORY -> StmSlotManifestEntryType.DIRECTORY
+        StmZipManifestEntryType.FILE -> StmSlotManifestEntryType.FILE
+    }
+
+private fun StmSlotManifestEntry.toZipManifestEntry(
+    relativePath: String,
+): StmZipManifestEntry = StmZipManifestEntry(
+    relativePath = relativePath,
+    type = when (type) {
+        StmSlotManifestEntryType.DIRECTORY -> StmZipManifestEntryType.DIRECTORY
+        StmSlotManifestEntryType.FILE -> StmZipManifestEntryType.FILE
+    },
+    sizeBytes = bytes,
+    sha256 = fileSha256,
+)

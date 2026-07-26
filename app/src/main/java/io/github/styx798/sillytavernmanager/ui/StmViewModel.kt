@@ -21,6 +21,8 @@ import io.github.styx798.sillytavernmanager.core.logging.LogRepository
 import io.github.styx798.sillytavernmanager.core.logging.LogSource
 import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreCommandResult
 import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreController
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import io.github.styx798.sillytavernmanager.core.settings.AppLanguage
 import io.github.styx798.sillytavernmanager.core.settings.SettingsRepository
 import io.github.styx798.sillytavernmanager.core.settings.ThemeMode
@@ -54,6 +56,30 @@ class StmViewModel(container: AppContainer) : ViewModel() {
 
     fun stopCore() {
         dispatchCoreCommand(stmCoreController::stop)
+    }
+
+    fun openCore() {
+        dispatchCoreCommand(stmCoreController::openCore)
+    }
+
+    fun restartCore() {
+        dispatchCoreCommand(stmCoreController::restartCore)
+    }
+
+    fun closeCore() {
+        dispatchCoreCommand(stmCoreController::closeCore)
+    }
+
+    fun continueWaiting(operationId: String) {
+        dispatchCoreCommand { stmCoreController.continueWaiting(operationId) }
+    }
+
+    fun cancelWait(operationId: String, kind: StmCoreWaitKind) {
+        if (kind == StmCoreWaitKind.SILLY_TAVERN_START) {
+            stopCore()
+        } else {
+            cancelCoreJob(operationId)
+        }
     }
 
     fun setThemeMode(themeMode: ThemeMode) {
@@ -139,7 +165,10 @@ class StmViewModel(container: AppContainer) : ViewModel() {
         }
     }
 
-    fun installDownloadedArchive(archive: DownloadedStArchive) {
+    fun installDownloadedArchive(
+        archive: DownloadedStArchive,
+        installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+    ) {
         val exactCommit = archive.identity.exactCommit
         if (exactCommit == null) {
             logRepository.append(
@@ -151,7 +180,7 @@ class StmViewModel(container: AppContainer) : ViewModel() {
         }
         val slotId = "st-${archive.channel.branch}-${exactCommit.lowercase()}"
         dispatchCoreCommand {
-            stmCoreController.installDownloadedArchive(slotId, archive)
+            stmCoreController.installDownloadedArchive(slotId, archive, installMode)
         }
     }
 
@@ -165,6 +194,10 @@ class StmViewModel(container: AppContainer) : ViewModel() {
 
     fun removeSlot(slotId: String) {
         dispatchCoreCommand { stmCoreController.remove(slotId) }
+    }
+
+    fun verifySlot(slotId: String) {
+        dispatchCoreCommand { stmCoreController.verifySlot(slotId) }
     }
 
     fun cancelCoreJob(operationId: String) {

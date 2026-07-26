@@ -2,7 +2,9 @@ package io.github.styx798.sillytavernmanager.data.stmcore
 
 import android.content.Context
 import android.os.Environment
+import android.os.Looper
 import android.os.ParcelFileDescriptor
+import io.github.styx798.sillytavernmanager.BuildConfig
 import io.github.styx798.sillytavernmanager.core.downloads.DownloadedStArchive
 import io.github.styx798.sillytavernmanager.core.downloads.StArchiveIdentityClassification
 import io.github.styx798.sillytavernmanager.core.downloads.StArchiveIntegrityClassification
@@ -18,6 +20,7 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactIntegrity
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactKind
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactTrust
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreState
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -38,6 +41,9 @@ class AndroidStmCoreController(context: Context) :
     private val client = StmCoreClient(context, this)
     private val mutableConnectionState = MutableStateFlow(StmCoreConnectionState.CONNECTING)
     private val snapshotEpoch = StmCoreSnapshotEpoch()
+    private var closedByUser = false
+    private var detachedAfterTaskRemoval = false
+    private var restartRequested = false
 
     override val state: StateFlow<StmCoreState> = mutableState.asStateFlow()
     override val connectionState: StateFlow<StmCoreConnectionState> =
@@ -48,6 +54,21 @@ class AndroidStmCoreController(context: Context) :
 
     init {
         client.connect()
+    }
+
+    override fun resumeAppTask() {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "STM app-task ownership must be resumed from the main thread"
+        }
+        if (!detachedAfterTaskRemoval) return
+        detachedAfterTaskRemoval = false
+        closedByUser = false
+        restartRequested = false
+        snapshotEpoch.disconnect()
+        mutableConnectionState.value = StmCoreConnectionState.CONNECTING
+        if (!client.connect()) {
+            mutableConnectionState.value = StmCoreConnectionState.DISCONNECTED
+        }
     }
 
     override suspend fun start(): StmCoreCommandResult = withContext(Dispatchers.Main.immediate) {
@@ -67,12 +88,31 @@ class AndroidStmCoreController(context: Context) :
                 "STM Core cannot start while it is ${current.runState.name.lowercase()}",
             )
         }
+        val active = current.activeSlot
+        val activeSlot = active?.let { pointer ->
+            current.slots.singleOrNull {
+                it.id == pointer.slotId &&
+                    it.revision == pointer.slotRevision &&
+                    it.artifact?.kind == StmCoreArtifactKind.SILLY_TAVERN_SOURCE
+            }
+        }
+        if (activeSlot == null && !BuildConfig.DEBUG) {
+            return@withContext StmCoreCommandResult.Rejected(
+                "Select a READY SillyTavern version before starting it",
+            )
+        }
+        if (activeSlot != null && !client.prepareForSillyTavernStart()) {
+            return@withContext StmCoreCommandResult.Rejected(
+                "Android did not allow the SillyTavern foreground runtime to start",
+            )
+        }
         val operationId = UUID.randomUUID().toString()
         deliverConnectedCoreCommand(
             connectionState = mutableConnectionState.value,
             unavailableReason = "Android could not bind the private STM Core service",
             delivery = { client.connectAndStart(operationId) },
             onDeliveryFailure = {
+                client.releasePreparedSillyTavernForeground()
                 observeIpcFailure("Android could not bind the private STM Core service")
             },
         )
@@ -101,12 +141,106 @@ class AndroidStmCoreController(context: Context) :
         )
     }
 
+    override suspend fun openCore(): StmCoreCommandResult = withContext(Dispatchers.Main.immediate) {
+        if (mutableConnectionState.value != StmCoreConnectionState.CLOSED) {
+            return@withContext StmCoreCommandResult.Rejected("STM Core is already open")
+        }
+        detachedAfterTaskRemoval = false
+        closedByUser = false
+        restartRequested = false
+        snapshotEpoch.disconnect()
+        mutableConnectionState.value = StmCoreConnectionState.CONNECTING
+        if (client.connect()) {
+            StmCoreCommandResult.Accepted
+        } else {
+            mutableConnectionState.value = StmCoreConnectionState.DISCONNECTED
+            StmCoreCommandResult.Rejected("Android could not bind the private STM Core service")
+        }
+    }
+
+    override suspend fun restartCore(): StmCoreCommandResult =
+        withContext(Dispatchers.Main.immediate) {
+            if (mutableConnectionState.value != StmCoreConnectionState.CONNECTED) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "The STM Core control state is not connected",
+                )
+            }
+            if (!client.prepareForCoreShutdown()) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "Android could not keep Core alive for its restart cleanup",
+                )
+            }
+            val operationId = UUID.randomUUID().toString()
+            restartRequested = true
+            val delivered = client.requestRestartCore(operationId)
+            if (!delivered) {
+                restartRequested = false
+                observeIpcFailure("The STM Core restart command could not be delivered")
+                return@withContext StmCoreCommandResult.Rejected(
+                    "The STM Core restart command could not be delivered",
+                )
+            }
+            StmCoreCommandResult.Accepted
+        }
+
+    override suspend fun closeCore(): StmCoreCommandResult =
+        withContext(Dispatchers.Main.immediate) {
+            if (mutableConnectionState.value != StmCoreConnectionState.CONNECTED) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "The STM Core control state is not connected",
+                )
+            }
+            if (!client.prepareForCoreShutdown()) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "Android could not keep Core alive for its shutdown cleanup",
+                )
+            }
+            val operationId = UUID.randomUUID().toString()
+            if (!client.requestCloseCore(operationId)) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "The STM Core close command could not be delivered",
+                )
+            }
+            closedByUser = true
+            detachedAfterTaskRemoval = false
+            restartRequested = false
+            snapshotEpoch.disconnect()
+            client.disconnect()
+            mutableConnectionState.value = StmCoreConnectionState.CLOSED
+            StmCoreCommandResult.Accepted
+        }
+
+    override suspend fun continueWaiting(operationId: String): StmCoreCommandResult =
+        withContext(Dispatchers.Main.immediate) {
+            if (mutableConnectionState.value != StmCoreConnectionState.CONNECTED) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "The STM Core control state is not connected",
+                )
+            }
+            val prompt = mutableState.value.waitPrompt
+            if (prompt?.operationId != operationId) {
+                return@withContext StmCoreCommandResult.Rejected(
+                    "The wait prompt is no longer active",
+                )
+            }
+            val commandId = UUID.randomUUID().toString()
+            if (client.requestContinueWaiting(commandId, operationId)) {
+                StmCoreCommandResult.Accepted
+            } else {
+                observeIpcFailure("The continue-waiting command could not be delivered")
+                StmCoreCommandResult.Rejected(
+                    "The continue-waiting command could not be delivered",
+                )
+            }
+        }
+
     override suspend fun installCachedArtifact(
         slotId: String,
         cacheFileName: String,
         artifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode,
     ): StmCoreCommandResult = deliverMaintenanceCommand { operationId ->
-        client.requestInstall(operationId, slotId, cacheFileName, artifact)
+        client.requestInstall(operationId, slotId, cacheFileName, artifact, installMode)
     }
 
     override suspend fun importDownloadedArchive(
@@ -117,12 +251,19 @@ class AndroidStmCoreController(context: Context) :
     override suspend fun installDownloadedArchive(
         slotId: String,
         archive: DownloadedStArchive,
-    ): StmCoreCommandResult = deliverDownloadedArchive(slotId, archive, install = true)
+        installMode: StmCoreInstallMode,
+    ): StmCoreCommandResult = deliverDownloadedArchive(
+        slotId,
+        archive,
+        install = true,
+        installMode = installMode,
+    )
 
     private suspend fun deliverDownloadedArchive(
         slotId: String,
         archive: DownloadedStArchive,
         install: Boolean,
+        installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
     ): StmCoreCommandResult {
         if (mutableConnectionState.value != StmCoreConnectionState.CONNECTED) {
             return StmCoreCommandResult.Rejected("The STM Core control state is not connected")
@@ -153,9 +294,10 @@ class AndroidStmCoreController(context: Context) :
                             client.requestInstallImportedArtifact(
                                 operationId,
                                 slotId,
-                                descriptor,
-                                prepared.artifact,
-                            )
+                            descriptor,
+                            prepared.artifact,
+                            installMode,
+                        )
                         } else {
                             client.requestImportArtifact(
                                 operationId,
@@ -185,14 +327,34 @@ class AndroidStmCoreController(context: Context) :
     override suspend fun remove(slotId: String): StmCoreCommandResult =
         deliverMaintenanceCommand { operationId -> client.requestRemove(operationId, slotId) }
 
+    override suspend fun verifySlot(slotId: String): StmCoreCommandResult =
+        deliverMaintenanceCommand { operationId -> client.requestVerifySlot(operationId, slotId) }
+
     override fun onCoreStateChanged(state: StmCoreState) {
+        if (closedByUser || detachedAfterTaskRemoval) return
         if (!snapshotEpoch.accept(state)) return
+        restartRequested = false
         mutableState.value = state
         mutableConnectionState.value = StmCoreConnectionState.CONNECTED
     }
 
     override fun onCoreProcessDisconnected() {
+        if (closedByUser || detachedAfterTaskRemoval) return
+        if (restartRequested) {
+            snapshotEpoch.disconnect()
+            mutableConnectionState.value = StmCoreConnectionState.CONNECTING
+            return
+        }
         observeIpcFailure("The private STM Core process disconnected unexpectedly")
+    }
+
+    override fun onCoreAppTaskRemoved() {
+        if (closedByUser || detachedAfterTaskRemoval) return
+        detachedAfterTaskRemoval = true
+        restartRequested = false
+        snapshotEpoch.disconnect()
+        client.disconnect()
+        mutableConnectionState.value = StmCoreConnectionState.CLOSED
     }
 
     private fun observeIpcFailure(detail: String) {

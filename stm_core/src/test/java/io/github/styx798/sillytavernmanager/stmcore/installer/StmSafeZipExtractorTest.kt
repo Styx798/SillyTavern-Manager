@@ -68,6 +68,53 @@ class StmSafeZipExtractorTest {
     }
 
     @Test
+    fun `signed archive fast mode keeps CRC safety without per-file sync or SHA`() {
+        val environment = environment("signed-fast")
+        val content = ByteArray(128 * 1024).also { Random(17).nextBytes(it) }
+        writeZip(
+            environment.artifact,
+            listOf(
+                ZipSpec("node_modules/", ByteArray(0), method = ZipEntry.STORED),
+                ZipSpec("node_modules/package.bin", content),
+            ),
+        )
+        var syncCalls = 0
+        val countingFactory = StmZipSinkFactory { path ->
+            val delegate = DefaultStmZipSinkFactory.open(path)
+            object : StmZipSink {
+                override fun write(buffer: ByteArray, offset: Int, length: Int) {
+                    delegate.write(buffer, offset, length)
+                }
+
+                override fun sync() {
+                    syncCalls += 1
+                    delegate.sync()
+                }
+
+                override fun close() = delegate.close()
+            }
+        }
+
+        val result = StmSafeZipExtractor(countingFactory).extract(
+            artifact = environment.artifact.toFile(),
+            operationStagingRoot = environment.operationRoot.toFile(),
+            mode = StmZipExtractionMode.SIGNED_ARCHIVE_FAST,
+        )
+
+        assertEquals(0, syncCalls)
+        assertEquals(content.size.toLong(), result.totalFileBytes)
+        assertEquals(
+            null,
+            result.entries.single { it.relativePath == "node_modules/package.bin" }.sha256,
+        )
+        assertTrue(
+            Files.readAllBytes(
+                result.payloadDirectory.toPath().resolve("node_modules/package.bin"),
+            ).contentEquals(content),
+        )
+    }
+
+    @Test
     fun `path traversal is rejected without writing outside staging`() {
         val environment = environment("traversal")
         val escaped = environment.stagingParent.resolve("escaped.txt")

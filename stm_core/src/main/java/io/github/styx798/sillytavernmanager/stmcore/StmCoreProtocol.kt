@@ -17,12 +17,18 @@ internal object StmCoreProtocol {
     const val MESSAGE_REMOVE_SLOT = 10
     const val MESSAGE_IMPORT_ARTIFACT = 11
     const val MESSAGE_INSTALL_IMPORTED_ARTIFACT = 12
+    const val MESSAGE_VERIFY_SLOT = 13
+    const val MESSAGE_CONTINUE_WAITING = 14
+    const val MESSAGE_RESTART_CORE = 15
+    const val MESSAGE_CLOSE_CORE = 16
+    const val MESSAGE_APP_TASK_REMOVED = 17
 
     private const val KEY_OPERATION_ID = "operation_id"
     private const val KEY_TARGET_ID = "target_id"
     private const val KEY_CACHE_FILE_NAME = "cache_file_name"
     private const val KEY_ARTIFACT = "artifact"
     private const val KEY_SOURCE_DESCRIPTOR = "source_descriptor"
+    private const val KEY_INSTALL_MODE = "install_mode"
 
     fun commandMessage(what: Int, operationId: String): Message =
         Message.obtain(null, what).apply {
@@ -45,9 +51,11 @@ internal object StmCoreProtocol {
         slotId: String,
         cacheFileName: String,
         artifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode,
     ): Message = targetCommandMessage(MESSAGE_INSTALL_CACHED_ARTIFACT, operationId, slotId).apply {
         data.putString(KEY_CACHE_FILE_NAME, cacheFileName)
         data.putBundle(KEY_ARTIFACT, artifact.toBundle())
+        data.putString(KEY_INSTALL_MODE, installMode.name)
     }
 
     fun installRequestFrom(message: Message): StmCoreInstallRequest? {
@@ -57,7 +65,8 @@ internal object StmCoreProtocol {
             ?.takeIf(::isSafeCacheFileName)
             ?: return null
         val artifact = message.data.getBundle(KEY_ARTIFACT)?.toCoreArtifact() ?: return null
-        return StmCoreInstallRequest(operationId, slotId, cacheFileName, artifact)
+        val installMode = installModeFrom(message) ?: return null
+        return StmCoreInstallRequest(operationId, slotId, cacheFileName, artifact, installMode)
     }
 
     fun importArtifactMessage(
@@ -75,6 +84,7 @@ internal object StmCoreProtocol {
         slotId: String,
         sourceDescriptor: ParcelFileDescriptor,
         artifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode,
     ): Message = targetCommandMessage(
         MESSAGE_INSTALL_IMPORTED_ARTIFACT,
         operationId,
@@ -82,6 +92,7 @@ internal object StmCoreProtocol {
     ).apply {
         data.putParcelable(KEY_SOURCE_DESCRIPTOR, sourceDescriptor)
         data.putBundle(KEY_ARTIFACT, artifact.toBundle())
+        data.putString(KEY_INSTALL_MODE, installMode.name)
     }
 
     @Suppress("DEPRECATION")
@@ -107,7 +118,18 @@ internal object StmCoreProtocol {
             sourceDescriptor.close()
             return null
         }
-        return StmCoreImportRequest(operationId, slotId, sourceDescriptor, artifact)
+        val installMode = installModeFrom(message)
+        if (installMode == null) {
+            sourceDescriptor.close()
+            return null
+        }
+        return StmCoreImportRequest(
+            operationId,
+            slotId,
+            sourceDescriptor,
+            artifact,
+            installMode,
+        )
     }
 
     @Suppress("DEPRECATION")
@@ -121,6 +143,9 @@ internal object StmCoreProtocol {
         Message.obtain(null, MESSAGE_STATE).apply {
             data = StmCoreStateBundleCodec.toBundle(state)
         }
+
+    fun appTaskRemovedMessage(): Message =
+        Message.obtain(null, MESSAGE_APP_TASK_REMOVED)
 
     fun stateFrom(message: Message): StmCoreState? {
         if (message.what != MESSAGE_STATE) return null
@@ -136,6 +161,17 @@ internal object StmCoreProtocol {
 
     private fun isSafeCacheFileName(value: String): Boolean =
         value.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,119}\\.zip"))
+
+    private fun installModeFrom(message: Message): StmCoreInstallMode? {
+        val encoded = message.data.getString(KEY_INSTALL_MODE)
+            ?: return StmCoreInstallMode.FAST_SIGNED_RUNTIME
+        return runCatching { StmCoreInstallMode.valueOf(encoded) }.getOrNull()
+    }
+}
+
+enum class StmCoreInstallMode {
+    FAST_SIGNED_RUNTIME,
+    LOCAL_NPM_BUILD,
 }
 
 data class StmCoreInstallRequest(
@@ -143,6 +179,7 @@ data class StmCoreInstallRequest(
     val slotId: String,
     val cacheFileName: String,
     val artifact: StmCoreArtifact,
+    val installMode: StmCoreInstallMode,
 )
 
 data class StmCoreImportRequest(
@@ -150,6 +187,7 @@ data class StmCoreImportRequest(
     val slotId: String,
     val sourceDescriptor: ParcelFileDescriptor,
     val artifact: StmCoreArtifact,
+    val installMode: StmCoreInstallMode,
 )
 
 private object StmCoreStateBundleCodec {
@@ -175,6 +213,8 @@ private object StmCoreStateBundleCodec {
     private const val ACTIVE_SLOT = "active_slot"
     private const val RUNNING_SLOT = "running_slot"
     private const val JOBS = "jobs"
+    private const val WAIT_PROMPT = "wait_prompt"
+    private const val RUNTIME_TRANSFER = "runtime_transfer"
 
     fun toBundle(state: StmCoreState): Bundle = Bundle().apply {
         state.requireValidCoreSnapshot()
@@ -200,6 +240,8 @@ private object StmCoreStateBundleCodec {
         state.activeSlot?.let { putBundle(ACTIVE_SLOT, it.toBundle()) }
         state.runningSlot?.let { putBundle(RUNNING_SLOT, it.toBundle()) }
         putParcelableArray(JOBS, state.jobs.map(StmCoreJob::toBundle).toTypedArray())
+        state.waitPrompt?.let { putBundle(WAIT_PROMPT, it.toBundle()) }
+        state.runtimeTransfer?.let { putBundle(RUNTIME_TRANSFER, it.toBundle()) }
     }
 
     @Suppress("DEPRECATION")
@@ -232,6 +274,8 @@ private object StmCoreStateBundleCodec {
             jobs = bundle.getParcelableArray(JOBS)
                 .orEmpty()
                 .map { (it as Bundle).toCoreJob() },
+            waitPrompt = bundle.getBundle(WAIT_PROMPT)?.toCoreWaitPrompt(),
+            runtimeTransfer = bundle.getBundle(RUNTIME_TRANSFER)?.toCoreTransferProgress(),
         ).requireValidCoreSnapshot()
     }.getOrNull()
 }
@@ -350,3 +394,36 @@ private fun Bundle.toCoreJob(): StmCoreJob = StmCoreJob(
     error = getBundle("error")?.toCoreError(),
     artifact = getBundle("artifact")?.toCoreArtifact(),
 )
+
+private fun StmCoreWaitPrompt.toBundle(): Bundle = Bundle().apply {
+    putString("operation_id", operationId)
+    putString("kind", kind.name)
+    putLong("interval_millis", intervalMillis)
+    putLong("triggered_at", triggeredAtEpochMs)
+    putString("summary", summary)
+}
+
+private fun Bundle.toCoreWaitPrompt(): StmCoreWaitPrompt = StmCoreWaitPrompt(
+    operationId = requireNotNull(getString("operation_id")),
+    kind = StmCoreWaitKind.valueOf(requireNotNull(getString("kind"))),
+    intervalMillis = getLong("interval_millis"),
+    triggeredAtEpochMs = getLong("triggered_at"),
+    summary = requireNotNull(getString("summary")),
+)
+
+private fun StmCoreTransferProgress.toBundle(): Bundle = Bundle().apply {
+    putString("operation_id", operationId)
+    putLong("transferred_bytes", transferredBytes)
+    putLong("total_bytes", totalBytes)
+    putLong("bytes_per_second", bytesPerSecond)
+    putLong("updated_at", updatedAtEpochMs)
+}
+
+private fun Bundle.toCoreTransferProgress(): StmCoreTransferProgress =
+    StmCoreTransferProgress(
+        operationId = requireNotNull(getString("operation_id")),
+        transferredBytes = getLong("transferred_bytes"),
+        totalBytes = getLong("total_bytes"),
+        bytesPerSecond = getLong("bytes_per_second"),
+        updatedAtEpochMs = getLong("updated_at"),
+    )

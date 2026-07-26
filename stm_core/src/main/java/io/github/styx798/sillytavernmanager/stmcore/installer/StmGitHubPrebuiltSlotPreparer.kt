@@ -88,6 +88,7 @@ internal fun interface StmRuntimeLayerDownloader {
         entry: StmPrebuiltRuntimeCatalogEntry,
         destination: File,
         cancellation: StmExtractionCancellation,
+        onProgress: (transferredBytes: Long, totalBytes: Long, bytesPerSecond: Long) -> Unit,
     ): StmRuntimeLayerDownloadResult
 }
 
@@ -95,7 +96,7 @@ internal fun interface StmRuntimeLayerArchiveInstaller {
     fun install(
         entry: StmPrebuiltRuntimeCatalogEntry,
         request: StmRuntimeSlotPreparationRequest,
-        archive: File,
+        archive: StmRuntimeLayerDownloadResult.Downloaded,
         cancellation: StmExtractionCancellation,
     ): StmRuntimeSlotAdmissionEvidence
 }
@@ -113,13 +114,14 @@ internal fun interface StmSignedPrebuiltSupplyInstaller {
 /**
  * Production ST runtime preparation policy.
  *
- * An exact catalog hit first tries the immutable signed runtime layer. Only transport-level
- * unavailability falls back to the fixed device-local npm path. A downloaded asset that violates
- * its content identity, archive boundary, signature, source binding, runtime binding, inventory or
- * assembled-tree identity fails closed and never triggers a local build.
+ * The requested install mode is authoritative. Fast mode only tries an exact immutable signed
+ * runtime layer and reports catalog or transport unavailability without silently starting npm.
+ * Local mode only runs the fixed device-local npm path after the app has obtained user consent.
+ * A downloaded asset that violates its content identity, archive boundary, signature, source
+ * binding, runtime binding, inventory or assembled-tree identity always fails closed.
  */
 internal class StmGitHubPrebuiltSlotPreparer(
-    private val localFallback: StmRuntimeSlotPreparer,
+    private val localPreparer: StmRuntimeSlotPreparer,
     private val runnableAcceptor: StmRuntimeSlotRunnableAcceptor,
     private val catalogLookup: (StmRuntimeSlotPreparationRequest) ->
         StmPrebuiltRuntimeCatalogEntry? = StmPrebuiltRuntimeCatalog::find,
@@ -132,8 +134,16 @@ internal class StmGitHubPrebuiltSlotPreparer(
         cancellation: StmExtractionCancellation,
         onPhase: (StmRuntimeSlotPreparationPhase) -> Unit,
     ): StmRuntimeSlotAdmissionEvidence {
+        if (request.installMode ==
+            io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode.LOCAL_NPM_BUILD
+        ) {
+            return localPreparer.prepare(request, cancellation, onPhase)
+        }
         val entry = catalogLookup(request)
-            ?: return localFallback.prepare(request, cancellation, onPhase)
+            ?: throw StmRuntimeSlotPreparationException(
+                StmRuntimeSlotPreparationErrorCode.PREBUILT_RUNTIME_NOT_AVAILABLE,
+                "No signed runtime layer is published for this exact SillyTavern identity",
+            )
         throwIfCancelled(cancellation)
         val download = File(request.operationRoot, DOWNLOAD_FILE)
         check(download.parentFile == request.operationRoot && !download.exists()) {
@@ -142,11 +152,26 @@ internal class StmGitHubPrebuiltSlotPreparer(
 
         try {
             onPhase(StmRuntimeSlotPreparationPhase.DOWNLOADING_RUNTIME_LAYER)
-            when (val outcome = downloader.download(entry, download, cancellation)) {
+            val downloadOutcome = try {
+                downloader.download(
+                    entry,
+                    download,
+                    cancellation,
+                    request.observer::onRuntimeTransfer,
+                )
+            } finally {
+                request.observer.endRuntimeTransfer()
+            }
+            val verifiedDownload = when (val outcome = downloadOutcome) {
                 is StmRuntimeLayerDownloadResult.Unavailable -> {
                     deleteRegularNoFollow(download)
                     throwIfCancelled(cancellation)
-                    return localFallback.prepare(request, cancellation, onPhase)
+                    throw StmRuntimeSlotPreparationException(
+                        StmRuntimeSlotPreparationErrorCode
+                            .PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE,
+                        "The signed runtime layer could not be downloaded: " +
+                            outcome.detail.safeDetail(),
+                    )
                 }
 
                 is StmRuntimeLayerDownloadResult.Rejected ->
@@ -166,13 +191,14 @@ internal class StmGitHubPrebuiltSlotPreparer(
                     ) {
                         "Runtime-layer downloader returned an unbound identity"
                     }
+                    outcome
                 }
             }
             throwIfCancelled(cancellation)
 
             val evidence = try {
                 onPhase(StmRuntimeSlotPreparationPhase.VERIFYING_RUNTIME_LAYER)
-                archiveInstaller.install(entry, request, download, cancellation)
+                archiveInstaller.install(entry, request, verifiedDownload, cancellation)
             } catch (error: StmRuntimeSlotPreparationException) {
                 throw error
             } catch (error: Exception) {
@@ -191,7 +217,12 @@ internal class StmGitHubPrebuiltSlotPreparer(
             )
             try {
                 onPhase(StmRuntimeSlotPreparationPhase.RUNNABLE_ACCEPTANCE)
-                runnableAcceptor.accept(request, bundle, cancellation)
+                runnableAcceptor.accept(
+                    request,
+                    bundle,
+                    cancellation,
+                    StmRunnableAcceptanceProgramPolicy.SIGNED_ARCHIVE_BOUND,
+                )
             } catch (error: StmRuntimeSlotPreparationException) {
                 throw error
             } catch (error: Exception) {
@@ -233,9 +264,8 @@ internal class StmGitHubPrebuiltSlotPreparer(
 }
 
 internal class StmGitHubRuntimeLayerDownloader(
-    private val connectTimeoutMillis: Int = 15_000,
-    private val readTimeoutMillis: Int = 30_000,
-    private val overallTimeoutMillis: Long = 10L * 60L * 1000L,
+    private val connectTimeoutMillis: Int = 5_000,
+    private val readTimeoutMillis: Int = 10_000,
     private val connectionFactory: (URL) -> HttpsURLConnection = { url ->
         url.openConnection() as HttpsURLConnection
     },
@@ -244,6 +274,7 @@ internal class StmGitHubRuntimeLayerDownloader(
         entry: StmPrebuiltRuntimeCatalogEntry,
         destination: File,
         cancellation: StmExtractionCancellation,
+        onProgress: (transferredBytes: Long, totalBytes: Long, bytesPerSecond: Long) -> Unit,
     ): StmRuntimeLayerDownloadResult {
         val destinationPath = destination.toPath().toAbsolutePath().normalize()
         val parent = destinationPath.parent
@@ -263,16 +294,11 @@ internal class StmGitHubRuntimeLayerDownloader(
             return StmRuntimeLayerDownloadResult.Rejected("Release URL is outside the allowlist")
         }
 
-        val deadline = System.nanoTime() +
-            overallTimeoutMillis.coerceAtMost(Long.MAX_VALUE / 1_000_000L) * 1_000_000L
         var current = initial
         var redirects = 0
         while (true) {
             if (cancellation.isCancelled()) {
                 return cancelled(destinationPath)
-            }
-            if (System.nanoTime() >= deadline) {
-                return unavailable(destinationPath, "Release download exceeded its time budget")
             }
             val connection = try {
                 connectionFactory(current.toURL()).apply {
@@ -300,7 +326,7 @@ internal class StmGitHubRuntimeLayerDownloader(
                             entry = entry,
                             destination = destinationPath,
                             cancellation = cancellation,
-                            deadlineNanos = deadline,
+                            onProgress = onProgress,
                         )
 
                     code in REDIRECT_CODES -> {
@@ -360,7 +386,7 @@ internal class StmGitHubRuntimeLayerDownloader(
         entry: StmPrebuiltRuntimeCatalogEntry,
         destination: Path,
         cancellation: StmExtractionCancellation,
-        deadlineNanos: Long,
+        onProgress: (transferredBytes: Long, totalBytes: Long, bytesPerSecond: Long) -> Unit,
     ): StmRuntimeLayerDownloadResult {
         val declaredLength = connection.contentLengthLong
         if (declaredLength >= 0 && declaredLength != entry.archiveBytes) {
@@ -373,6 +399,9 @@ internal class StmGitHubRuntimeLayerDownloader(
         }
         val digest = MessageDigest.getInstance(SHA256)
         var total = 0L
+        var windowStartedAt = System.nanoTime()
+        var windowStartedBytes = 0L
+        onProgress(0L, entry.archiveBytes, 0L)
         try {
             try {
                 Files.createFile(destination)
@@ -384,12 +413,6 @@ internal class StmGitHubRuntimeLayerDownloader(
                     val buffer = ByteArray(COPY_BUFFER_BYTES)
                     while (true) {
                         if (cancellation.isCancelled()) return cancelled(destination)
-                        if (System.nanoTime() >= deadlineNanos) {
-                            return unavailable(
-                                destination,
-                                "Release download exceeded its time budget",
-                            )
-                        }
                         val count = try {
                             stream.read(buffer)
                         } catch (_: IOException) {
@@ -411,6 +434,15 @@ internal class StmGitHubRuntimeLayerDownloader(
                             return rejected(destination, "Release download could not be stored")
                         }
                         digest.update(buffer, 0, count)
+                        val now = System.nanoTime()
+                        val elapsed = now - windowStartedAt
+                        if (elapsed >= PROGRESS_INTERVAL_NANOS) {
+                            val speed = ((total - windowStartedBytes) * 1_000_000_000L / elapsed)
+                                .coerceAtLeast(0L)
+                            onProgress(total, entry.archiveBytes, speed)
+                            windowStartedAt = now
+                            windowStartedBytes = total
+                        }
                     }
                 }
                 try {
@@ -426,6 +458,10 @@ internal class StmGitHubRuntimeLayerDownloader(
         if (total != entry.archiveBytes || observedSha != entry.archiveSha256) {
             return rejected(destination, "Release content identity did not match the catalog")
         }
+        val finalElapsed = (System.nanoTime() - windowStartedAt).coerceAtLeast(1L)
+        val finalSpeed = ((total - windowStartedBytes) * 1_000_000_000L / finalElapsed)
+            .coerceAtLeast(0L)
+        onProgress(total, entry.archiveBytes, finalSpeed)
         return StmRuntimeLayerDownloadResult.Downloaded(
             file = destination.toFile(),
             bytes = total,
@@ -497,6 +533,7 @@ internal class StmGitHubRuntimeLayerDownloader(
     private companion object {
         const val MAX_REDIRECTS = 5
         const val COPY_BUFFER_BYTES = 64 * 1024
+        const val PROGRESS_INTERVAL_NANOS = 500_000_000L
         const val SHA256 = "SHA-256"
         val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
         val UNAVAILABLE_CODES = setOf(401, 403, 404, 408, 410, 425, 429)
@@ -511,7 +548,7 @@ internal class StmDefaultRuntimeLayerArchiveInstaller(
     override fun install(
         entry: StmPrebuiltRuntimeCatalogEntry,
         request: StmRuntimeSlotPreparationRequest,
-        archive: File,
+        archive: StmRuntimeLayerDownloadResult.Downloaded,
         cancellation: StmExtractionCancellation,
     ): StmRuntimeSlotAdmissionEvidence {
         requireArchiveIdentity(archive, entry, cancellation)
@@ -521,9 +558,10 @@ internal class StmDefaultRuntimeLayerArchiveInstaller(
         }
         try {
             val extraction = zipExtractor.extract(
-                artifact = archive,
+                artifact = archive.file,
                 operationStagingRoot = outerOperation,
                 cancellation = cancellation,
+                mode = StmZipExtractionMode.SIGNED_ARCHIVE_FAST,
             )
             val payload = extraction.payloadDirectory.toPath().toRealPath()
             val children = Files.list(payload).use { stream ->
@@ -557,37 +595,29 @@ internal class StmDefaultRuntimeLayerArchiveInstaller(
     }
 
     private fun requireArchiveIdentity(
-        archive: File,
+        archive: StmRuntimeLayerDownloadResult.Downloaded,
         entry: StmPrebuiltRuntimeCatalogEntry,
         cancellation: StmExtractionCancellation,
     ) {
-        val path = archive.toPath()
+        if (cancellation.isCancelled()) {
+            throw StmRuntimeSlotPreparationException(
+                StmRuntimeSlotPreparationErrorCode.OPERATION_CANCELLED,
+                "Runtime-layer verification was cancelled",
+            )
+        }
+        val path = archive.file.toPath()
         check(
             Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
                 !Files.isSymbolicLink(path)
         ) {
             "Runtime-layer archive is not a regular file"
         }
-        check(Files.size(path) == entry.archiveBytes) {
+        check(
+            archive.bytes == entry.archiveBytes &&
+                archive.sha256 == entry.archiveSha256 &&
+                Files.size(path) == archive.bytes
+        ) {
             "Runtime-layer archive length did not match the catalog"
-        }
-        val digest = MessageDigest.getInstance(SHA256)
-        Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { input ->
-            val buffer = ByteArray(COPY_BUFFER_BYTES)
-            while (true) {
-                if (cancellation.isCancelled()) {
-                    throw StmRuntimeSlotPreparationException(
-                        StmRuntimeSlotPreparationErrorCode.OPERATION_CANCELLED,
-                        "Runtime-layer verification was cancelled",
-                    )
-                }
-                val count = input.read(buffer)
-                if (count < 0) break
-                if (count > 0) digest.update(buffer, 0, count)
-            }
-        }
-        check(digest.digest().toHex() == entry.archiveSha256) {
-            "Runtime-layer archive SHA-256 did not match the catalog"
         }
     }
 
@@ -613,15 +643,9 @@ internal class StmDefaultRuntimeLayerArchiveInstaller(
         })
     }
 
-    private fun ByteArray.toHex(): String = joinToString("") { byte ->
-        "%02x".format(Locale.ROOT, byte.toInt() and 0xff)
-    }
-
     private companion object {
         const val OUTER_EXTRACTION_DIRECTORY = "prebuilt-runtime-extraction"
         const val DEPENDENCY_EXTRACTION_DIRECTORY = "prebuilt-dependency-extraction"
-        const val COPY_BUFFER_BYTES = 64 * 1024
-        const val SHA256 = "SHA-256"
 
         fun defaultSignedSupplyInstaller(): StmSignedPrebuiltSupplyInstaller {
             val entry = StmPrebuiltRuntimeCatalog.ST_1_18_0
@@ -658,6 +682,7 @@ internal class StmDefaultRuntimeLayerArchiveInstaller(
                         javetCoordinate = requestedEntry.deviceJavetCoordinate,
                         abi = requestedEntry.deviceAbi,
                     ),
+                    sourceEntries = request.sourceEntries,
                     cancellation = cancellation,
                 ).runtimeEvidence
             }

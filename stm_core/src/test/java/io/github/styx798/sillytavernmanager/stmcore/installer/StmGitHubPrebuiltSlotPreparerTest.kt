@@ -52,20 +52,19 @@ class StmGitHubPrebuiltSlotPreparerTest {
     }
 
     @Test
-    fun `transport unavailability invokes the device local fallback`() {
+    fun `transport unavailability stops fast install without invoking local npm`() {
         val entry = testEntry(bytes = 1, sha256 = "0".repeat(64))
         val fallbackCalls = AtomicInteger()
-        val fallbackEvidence = evidence()
         val preparer = StmGitHubPrebuiltSlotPreparer(
-            localFallback = StmRuntimeSlotPreparer { _, _, _ ->
+            localPreparer = StmRuntimeSlotPreparer { _, _, _ ->
                 fallbackCalls.incrementAndGet()
-                fallbackEvidence
+                evidence()
             },
-            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, _, _ ->
+            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, _, _, _ ->
                 error("Unavailable downloads must not run prebuilt acceptance")
             },
             catalogLookup = { entry },
-            downloader = StmRuntimeLayerDownloader { _, _, _ ->
+            downloader = StmRuntimeLayerDownloader { _, _, _, _ ->
                 StmRuntimeLayerDownloadResult.Unavailable("offline")
             },
             archiveInstaller = StmRuntimeLayerArchiveInstaller { _, _, _, _ ->
@@ -74,11 +73,16 @@ class StmGitHubPrebuiltSlotPreparerTest {
         )
         val phases = mutableListOf<StmRuntimeSlotPreparationPhase>()
 
+        val error = runCatching {
+            preparer.prepare(request(), StmExtractionCancellation.NONE, phases::add)
+        }.exceptionOrNull() as? StmRuntimeSlotPreparationException
+
+        assertNotNull(error)
         assertEquals(
-            fallbackEvidence,
-            preparer.prepare(request(), StmExtractionCancellation.NONE, phases::add),
+            StmRuntimeSlotPreparationErrorCode.PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE,
+            error?.code,
         )
-        assertEquals(1, fallbackCalls.get())
+        assertEquals(0, fallbackCalls.get())
         assertEquals(
             listOf(StmRuntimeSlotPreparationPhase.DOWNLOADING_RUNTIME_LAYER),
             phases,
@@ -86,17 +90,79 @@ class StmGitHubPrebuiltSlotPreparerTest {
     }
 
     @Test
+    fun `missing prebuilt identity stops fast install without invoking local npm`() {
+        val localCalls = AtomicInteger()
+        val preparer = StmGitHubPrebuiltSlotPreparer(
+            localPreparer = StmRuntimeSlotPreparer { _, _, _ ->
+                localCalls.incrementAndGet()
+                evidence()
+            },
+            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, _, _, _ -> },
+            catalogLookup = { null },
+            downloader = StmRuntimeLayerDownloader { _, _, _, _ ->
+                error("A missing catalog entry must not download")
+            },
+        )
+
+        val error = runCatching {
+            preparer.prepare(request(), StmExtractionCancellation.NONE) {}
+        }.exceptionOrNull() as? StmRuntimeSlotPreparationException
+
+        assertNotNull(error)
+        assertEquals(
+            StmRuntimeSlotPreparationErrorCode.PREBUILT_RUNTIME_NOT_AVAILABLE,
+            error?.code,
+        )
+        assertEquals(0, localCalls.get())
+    }
+
+    @Test
+    fun `explicit local mode invokes npm without catalog lookup or download`() {
+        val localCalls = AtomicInteger()
+        val localEvidence = evidence()
+        val preparer = StmGitHubPrebuiltSlotPreparer(
+            localPreparer = StmRuntimeSlotPreparer { actual, _, _ ->
+                assertEquals(
+                    io.github.styx798.sillytavernmanager.stmcore
+                        .StmCoreInstallMode.LOCAL_NPM_BUILD,
+                    actual.installMode,
+                )
+                localCalls.incrementAndGet()
+                localEvidence
+            },
+            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, _, _, _ ->
+                error("Local mode owns its own runnable acceptance")
+            },
+            catalogLookup = { error("Local mode must not inspect the prebuilt catalog") },
+            downloader = StmRuntimeLayerDownloader { _, _, _, _ ->
+                error("Local mode must not download a prebuilt runtime")
+            },
+        )
+
+        val actual = preparer.prepare(
+            request().copy(
+                installMode = io.github.styx798.sillytavernmanager.stmcore
+                    .StmCoreInstallMode.LOCAL_NPM_BUILD,
+            ),
+            StmExtractionCancellation.NONE,
+        ) {}
+
+        assertEquals(localEvidence, actual)
+        assertEquals(1, localCalls.get())
+    }
+
+    @Test
     fun `rejected download fails closed without local fallback`() {
         val entry = testEntry(bytes = 1, sha256 = "0".repeat(64))
         val fallbackCalled = AtomicBoolean(false)
         val preparer = StmGitHubPrebuiltSlotPreparer(
-            localFallback = StmRuntimeSlotPreparer { _, _, _ ->
+            localPreparer = StmRuntimeSlotPreparer { _, _, _ ->
                 fallbackCalled.set(true)
                 evidence()
             },
-            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, _, _ -> },
+            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, _, _, _ -> },
             catalogLookup = { entry },
-            downloader = StmRuntimeLayerDownloader { _, _, _ ->
+            downloader = StmRuntimeLayerDownloader { _, _, _, _ ->
                 StmRuntimeLayerDownloadResult.Rejected("hash mismatch")
             },
             archiveInstaller = StmRuntimeLayerArchiveInstaller { _, _, _, _ -> evidence() },
@@ -121,14 +187,16 @@ class StmGitHubPrebuiltSlotPreparerTest {
         val fallbackCalled = AtomicBoolean(false)
         val installerCalls = AtomicInteger()
         val acceptanceCalls = AtomicInteger()
+        var acceptanceProgramPolicy: StmRunnableAcceptanceProgramPolicy? = null
         val preparedEvidence = evidence()
         val preparer = StmGitHubPrebuiltSlotPreparer(
-            localFallback = StmRuntimeSlotPreparer { _, _, _ ->
+            localPreparer = StmRuntimeSlotPreparer { _, _, _ ->
                 fallbackCalled.set(true)
                 evidence()
             },
-            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, bundle, _ ->
+            runnableAcceptor = StmRuntimeSlotRunnableAcceptor { _, bundle, _, programPolicy ->
                 acceptanceCalls.incrementAndGet()
+                acceptanceProgramPolicy = programPolicy
                 assertEquals(
                     preparedEvidence.runtimeFiles.getValue(
                         StmRuntimeSlotAdmissionEvidence.BUNDLE_FILE,
@@ -137,8 +205,9 @@ class StmGitHubPrebuiltSlotPreparerTest {
                 )
             },
             catalogLookup = { entry },
-            downloader = StmRuntimeLayerDownloader { _, destination, _ ->
+            downloader = StmRuntimeLayerDownloader { _, destination, _, onProgress ->
                 destination.writeBytes(bytes)
+                onProgress(bytes.size.toLong(), bytes.size.toLong(), bytes.size.toLong())
                 StmRuntimeLayerDownloadResult.Downloaded(
                     destination,
                     bytes.size.toLong(),
@@ -147,7 +216,9 @@ class StmGitHubPrebuiltSlotPreparerTest {
             },
             archiveInstaller = StmRuntimeLayerArchiveInstaller { _, _, archive, _ ->
                 installerCalls.incrementAndGet()
-                assertTrue(archive.isFile)
+                assertTrue(archive.file.isFile)
+                assertEquals(bytes.size.toLong(), archive.bytes)
+                assertEquals(bytes.sha256(), archive.sha256)
                 preparedEvidence
             },
         )
@@ -165,6 +236,10 @@ class StmGitHubPrebuiltSlotPreparerTest {
         assertFalse(fallbackCalled.get())
         assertEquals(1, installerCalls.get())
         assertEquals(1, acceptanceCalls.get())
+        assertEquals(
+            StmRunnableAcceptanceProgramPolicy.SIGNED_ARCHIVE_BOUND,
+            acceptanceProgramPolicy,
+        )
         assertEquals(
             listOf(
                 StmRuntimeSlotPreparationPhase.DOWNLOADING_RUNTIME_LAYER,
@@ -218,7 +293,11 @@ class StmGitHubPrebuiltSlotPreparerTest {
                     operation = operation,
                     payload = payload,
                 ),
-                archive = archive,
+                archive = StmRuntimeLayerDownloadResult.Downloaded(
+                    archive,
+                    archive.length(),
+                    archive.readBytes().sha256(),
+                ),
                 cancellation = StmExtractionCancellation.NONE,
             ),
         )
@@ -243,7 +322,11 @@ class StmGitHubPrebuiltSlotPreparerTest {
             installer.install(
                 entry = testEntry(archive.length(), "0".repeat(64)),
                 request = request(operation = operation, payload = payload),
-                archive = archive,
+                archive = StmRuntimeLayerDownloadResult.Downloaded(
+                    archive,
+                    archive.length(),
+                    archive.readBytes().sha256(),
+                ),
                 cancellation = StmExtractionCancellation.NONE,
             )
         }.exceptionOrNull()
@@ -262,11 +345,13 @@ class StmGitHubPrebuiltSlotPreparerTest {
                 FakeHttpsURLConnection(url, 200, body)
             },
         )
+        val progress = mutableListOf<Triple<Long, Long, Long>>()
 
         val result = downloader.download(
             entry,
             destination,
             StmExtractionCancellation.NONE,
+            { transferred, total, speed -> progress += Triple(transferred, total, speed) },
         )
 
         assertTrue(result is StmRuntimeLayerDownloadResult.Downloaded)
@@ -274,6 +359,9 @@ class StmGitHubPrebuiltSlotPreparerTest {
         assertEquals(body.size.toLong(), result.bytes)
         assertEquals(body.sha256(), result.sha256)
         assertTrue(destination.readBytes().contentEquals(body))
+        assertEquals(0L, progress.first().first)
+        assertEquals(body.size.toLong(), progress.last().first)
+        assertTrue(progress.all { it.second == body.size.toLong() && it.third >= 0L })
     }
 
     @Test
@@ -290,6 +378,7 @@ class StmGitHubPrebuiltSlotPreparerTest {
             entry,
             destination,
             StmExtractionCancellation.NONE,
+            { _, _, _ -> },
         )
 
         assertTrue(result is StmRuntimeLayerDownloadResult.Unavailable)
@@ -315,6 +404,7 @@ class StmGitHubPrebuiltSlotPreparerTest {
             entry,
             destination,
             StmExtractionCancellation.NONE,
+            { _, _, _ -> },
         )
 
         assertTrue(result is StmRuntimeLayerDownloadResult.Rejected)

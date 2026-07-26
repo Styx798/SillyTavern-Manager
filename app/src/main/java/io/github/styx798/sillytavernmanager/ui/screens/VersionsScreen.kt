@@ -56,10 +56,12 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreJob
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobPhase
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobType
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreRunState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlot
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlotState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreState
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreTransferProgress
 import java.util.Date
 
 @Composable
@@ -73,15 +75,20 @@ fun VersionsScreen(
     onDeleteAllDownloads: () -> Unit,
     onClearDownloadFailure: () -> Unit,
     onImportDownloadedArchive: (DownloadedStArchive) -> Unit,
-    onInstallDownloadedArchive: (DownloadedStArchive) -> Unit,
+    onInstallDownloadedArchive: (DownloadedStArchive, StmCoreInstallMode) -> Unit,
     onActivateSlot: (String) -> Unit,
     onRollback: () -> Unit,
     onRemoveSlot: (String) -> Unit,
+    onVerifySlot: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showDownloadOptions by rememberSaveable { mutableStateOf(false) }
     var pendingRemoveSlotId by rememberSaveable { mutableStateOf<String?>(null) }
     var confirmRollback by rememberSaveable { mutableStateOf(false) }
+    var pendingLocalBuildSlotId by rememberSaveable { mutableStateOf<String?>(null) }
+    var dismissedInstallRecoveryOperationId by rememberSaveable {
+        mutableStateOf<String?>(null)
+    }
 
     if (showDownloadOptions) {
         DownloadOptionsDialog(
@@ -138,6 +145,40 @@ fun VersionsScreen(
                 }
             },
         )
+    }
+    pendingLocalBuildSlotId?.let { slotId ->
+        val archive = downloadState.archives.singleOrNull {
+            it.coreSlotIdOrNull() == slotId
+        }
+        if (archive != null) {
+            AlertDialog(
+                onDismissRequest = { pendingLocalBuildSlotId = null },
+                title = {
+                    Text(text = stringResource(R.string.st_install_local_confirm_title))
+                },
+                text = {
+                    Text(text = stringResource(R.string.st_install_local_confirm_body))
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingLocalBuildSlotId = null
+                            onInstallDownloadedArchive(
+                                archive,
+                                StmCoreInstallMode.LOCAL_NPM_BUILD,
+                            )
+                        },
+                    ) {
+                        Text(text = stringResource(R.string.st_install_local_confirm_action))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingLocalBuildSlotId = null }) {
+                        Text(text = stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
     }
 
     val hasActiveJob = coreState.jobs.any { job -> job.state in ACTIVE_JOB_STATES }
@@ -227,15 +268,66 @@ fun VersionsScreen(
             }
         }
 
+        coreState.runtimeTransfer?.let { progress ->
+            item {
+                RuntimeLayerTransferCard(progress)
+            }
+        }
+
         item {
             DownloadedArchivesCard(
                 archives = downloadState.archives,
                 canPrepare = canPrepare,
                 onImport = onImportDownloadedArchive,
-                onInstall = onInstallDownloadedArchive,
+                onInstall = { archive ->
+                    onInstallDownloadedArchive(
+                        archive,
+                        StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+                    )
+                },
                 onDelete = onDeleteDownload,
                 onDeleteAll = onDeleteAllDownloads,
             )
+        }
+
+        val latestInstallJob = coreState.jobs
+            .filter { it.type == StmCoreJobType.INSTALL }
+            .maxByOrNull(StmCoreJob::updatedAtEpochMs)
+        val recoverableInstallJob = latestInstallJob?.takeIf { job ->
+            job.state == StmCoreJobState.FAILED &&
+                job.error?.code in RECOVERABLE_PREBUILT_ERROR_CODES &&
+                coreState.slots.none {
+                    it.id == job.targetId && it.state == StmCoreSlotState.READY
+                }
+        }
+        val recoveryArchive = recoverableInstallJob?.let { job ->
+            downloadState.archives.singleOrNull { it.coreSlotIdOrNull() == job.targetId }
+        }
+        if (
+            recoverableInstallJob != null &&
+            recoveryArchive != null &&
+            recoverableInstallJob.operationId != dismissedInstallRecoveryOperationId &&
+            !hasActiveJob
+        ) {
+            item {
+                InstallRecoveryCard(
+                    job = recoverableInstallJob,
+                    canPrepare = canPrepare,
+                    onRetry = {
+                        onInstallDownloadedArchive(
+                            recoveryArchive,
+                            StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+                        )
+                    },
+                    onLocalBuild = {
+                        pendingLocalBuildSlotId = recoverableInstallJob.targetId
+                    },
+                    onDismiss = {
+                        dismissedInstallRecoveryOperationId =
+                            recoverableInstallJob.operationId
+                    },
+                )
+            }
         }
 
         item {
@@ -245,7 +337,98 @@ fun VersionsScreen(
                 onActivateSlot = onActivateSlot,
                 onRollback = { confirmRollback = true },
                 onRemoveSlot = { slotId -> pendingRemoveSlotId = slotId },
+                onVerifySlot = onVerifySlot,
             )
+        }
+    }
+}
+
+@Composable
+private fun RuntimeLayerTransferCard(progress: StmCoreTransferProgress) {
+    val context = LocalContext.current
+    val percent = (progress.fraction * 100.0).toInt().coerceIn(0, 100)
+    ManagerSection(title = stringResource(R.string.st_runtime_download_title)) {
+        LinearProgressIndicator(
+            progress = { progress.fraction.toFloat() },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = stringResource(
+                R.string.st_runtime_download_progress,
+                percent,
+                Formatter.formatShortFileSize(context, progress.transferredBytes),
+                Formatter.formatShortFileSize(context, progress.totalBytes),
+            ),
+            modifier = Modifier.padding(top = 10.dp),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            text = stringResource(
+                R.string.st_runtime_download_speed,
+                Formatter.formatShortFileSize(context, progress.bytesPerSecond),
+            ),
+            modifier = Modifier.padding(top = 4.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun InstallRecoveryCard(
+    job: StmCoreJob,
+    canPrepare: Boolean,
+    onRetry: () -> Unit,
+    onLocalBuild: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val transportUnavailable =
+        job.error?.code == PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE
+    ManagerSection(title = stringResource(R.string.st_install_fast_unavailable_title)) {
+        Text(
+            text = stringResource(
+                if (transportUnavailable) {
+                    R.string.st_install_transport_unavailable_body
+                } else {
+                    R.string.st_install_not_available_body
+                },
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (transportUnavailable) {
+            Button(
+                onClick = onRetry,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+                enabled = canPrepare,
+            ) {
+                Text(text = stringResource(R.string.st_install_retry_fast))
+            }
+        }
+        OutlinedButton(
+            onClick = onLocalBuild,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = if (transportUnavailable) 10.dp else 16.dp),
+            enabled = canPrepare,
+        ) {
+            Text(text = stringResource(R.string.st_install_use_local))
+        }
+        Text(
+            text = stringResource(R.string.st_install_local_warning),
+            modifier = Modifier.padding(top = 8.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = onDismiss,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+        ) {
+            Text(text = stringResource(R.string.st_install_not_now))
         }
     }
 }
@@ -257,6 +440,7 @@ private fun CoreSlotsSection(
     onActivateSlot: (String) -> Unit,
     onRollback: () -> Unit,
     onRemoveSlot: (String) -> Unit,
+    onVerifySlot: (String) -> Unit,
 ) {
     val managedSlots = coreState.slots.userVisibleStSlots()
     val activeSlot = coreState.activeSlot?.takeIf { active ->
@@ -288,6 +472,7 @@ private fun CoreSlotsSection(
                     canMaintain = canMaintain,
                     onActivate = { onActivateSlot(slot.id) },
                     onRemove = { onRemoveSlot(slot.id) },
+                    onVerify = { onVerifySlot(slot.id) },
                 )
             }
             OutlinedButton(
@@ -324,6 +509,7 @@ private fun SlotCard(
     canMaintain: Boolean,
     onActivate: () -> Unit,
     onRemove: () -> Unit,
+    onVerify: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -370,11 +556,40 @@ private fun SlotCard(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             OutlinedButton(
+                onClick = onVerify,
+                modifier = Modifier.weight(1f),
+                enabled = canMaintain,
+            ) {
+                Text(text = stringResource(R.string.st_slot_verify_full))
+            }
+            OutlinedButton(
                 onClick = onActivate,
                 modifier = Modifier.weight(1f),
                 enabled = canMaintain && !isActive,
             ) {
                 Text(text = stringResource(R.string.st_slot_activate))
+            }
+            OutlinedButton(
+                onClick = onRemove,
+                modifier = Modifier.weight(1f),
+                enabled = canMaintain && !isActive && !isRunning,
+            ) {
+                Text(text = stringResource(R.string.st_slot_remove))
+            }
+        }
+    } else if (slot.state == StmCoreSlotState.BROKEN) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(
+                onClick = onVerify,
+                modifier = Modifier.weight(1f),
+                enabled = canMaintain,
+            ) {
+                Text(text = stringResource(R.string.st_slot_verify_full))
             }
             OutlinedButton(
                 onClick = onRemove,
@@ -1013,6 +1228,18 @@ private fun DownloadedArchivesCard(
         }
     }
 }
+
+private fun DownloadedStArchive.coreSlotIdOrNull(): String? =
+    identity.exactCommit?.let { commit -> "st-${channel.branch}-${commit.lowercase()}" }
+
+private const val PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE =
+    "PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE"
+private const val PREBUILT_RUNTIME_NOT_AVAILABLE =
+    "PREBUILT_RUNTIME_NOT_AVAILABLE"
+private val RECOVERABLE_PREBUILT_ERROR_CODES = setOf(
+    PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE,
+    PREBUILT_RUNTIME_NOT_AVAILABLE,
+)
 
 @Composable
 private fun DownloadFailureCard(failure: StDownloadFailure, onDismiss: () -> Unit) {

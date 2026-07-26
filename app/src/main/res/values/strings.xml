@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">Development build v0.0.1</string>
+    <string name="app_subtitle">Development build v0.0.2</string>
 
     <string name="nav_dashboard">Home</string>
     <string name="nav_tavern">Tavern</string>
@@ -13,11 +13,11 @@
     <string name="dashboard_title">Overview</string>
     <string name="dashboard_intro">View STM Core status and manage SillyTavern download artifacts from one place.</string>
     <string name="runtime_status_title">STM Core status</string>
-    <string name="runtime_stopped">STM Core is stopped</string>
-    <string name="runtime_starting">STM Core is starting</string>
-    <string name="runtime_running">STM Core is running</string>
-    <string name="runtime_stopping">STM Core is draining</string>
-    <string name="runtime_error">STM Core encountered an error</string>
+    <string name="runtime_stopped">Feather Engine is idle</string>
+    <string name="runtime_starting">Feather Engine is starting</string>
+    <string name="runtime_running">Feather Engine is running</string>
+    <string name="runtime_stopping">Feather Engine is draining</string>
+    <string name="runtime_error">Feather Engine encountered an error</string>
     <string name="runtime_badge_not_installed">Not installed</string>
     <string name="runtime_badge_stopped">Stopped</string>
     <string name="runtime_badge_starting">Starting</string>
@@ -27,7 +27,7 @@
     <string name="installed_version">Core component</string>
     <string name="core_revision">Snapshot revision</string>
     <string name="not_available">Not available</string>
-    <string name="core_summary_ready">STM Core is ready for a Feather Engine diagnostic session.</string>
+    <string name="core_summary_ready">STM Core is healthy and waiting; Feather Engine is idle.</string>
     <string name="core_summary_ready_st">STM Core is ready. The active signed SillyTavern version can be started.</string>
     <string name="core_summary_recovering">STM Core is reconciling its durable installer state.</string>
     <string name="core_summary_starting">Creating a one-shot Feather Engine session.</string>
@@ -39,6 +39,13 @@
     <string name="core_error_process_disconnected">The STM Core private process disconnected unexpectedly.</string>
     <string name="core_connection_connecting">Core connection is initializing; the last snapshot is not current health.</string>
     <string name="core_connection_disconnected">Core is disconnected; the displayed snapshot is historical and all controls are disabled.</string>
+    <string name="core_connection_closed">Core was closed by you. Open it to resume STM management.</string>
+    <string name="core_health_healthy">Core healthy</string>
+    <string name="core_health_connecting">Connecting</string>
+    <string name="core_health_disconnected">Disconnected</string>
+    <string name="core_health_closed">Core closed</string>
+    <string name="core_health_unavailable">Core health unavailable</string>
+    <string name="feather_engine_health">Feather Engine health</string>
     <string name="core_error_process_restarted">STM Core restarted during an active session and recovered a consistent state.</string>
     <string name="core_error_checkpoint_corrupt">STM Core could not recover its state checkpoint.</string>
     <string name="core_error_engine_failure">The Feather Engine session failed.</string>
@@ -51,8 +58,25 @@
     <string name="actions_title">Actions</string>
     <string name="action_start">Start</string>
     <string name="action_stop">Stop</string>
+    <string name="action_start_st">Start ST</string>
+    <string name="action_stop_st">Stop ST</string>
     <string name="action_open_st">Open ST</string>
-    <string name="action_unavailable_hint">Install or activate a runnable ST version, then start Core to open ST in the app. Core prefers a matching signed runtime layer and falls back to one-time local construction only when no usable prebuilt layer is available.</string>
+    <string name="action_open_core">Open Core</string>
+    <string name="action_restart_core">Restart Core</string>
+    <string name="action_close_core">Close Core</string>
+    <string name="action_unavailable_hint">Core stays in standby while STM is open. ST starts only when you request it and keeps running across STM pages until you stop it.</string>
+    <string name="st_runtime_controls_title">SillyTavern</string>
+    <string name="st_runtime_no_active">No active ST version</string>
+    <string name="st_runtime_running_version">Running ST %1$s</string>
+    <string name="st_runtime_stopped_version">ST %1$s is stopped</string>
+    <string name="st_runtime_status_starting">Starting and waiting for the local health check.</string>
+    <string name="st_runtime_status_running">The local server remains active until you stop it.</string>
+    <string name="st_runtime_status_stopping">Stopping the local server gracefully.</string>
+    <string name="st_runtime_status_stopped">The local server is not running.</string>
+    <string name="st_notification_permission_title">Show the ST running notification?</string>
+    <string name="st_notification_permission_body">Android uses a low-priority notification while ST is running so the local service remains visible. Denying notification permission does not prevent ST from starting, but the notification may not appear in the drawer.</string>
+    <string name="st_notification_permission_allow">Allow notification</string>
+    <string name="st_notification_permission_without">Start without it</string>
 
     <string name="build_status_title">Stage 1 capabilities</string>
     <string name="build_status_body">STM Core 0.1 provides an isolated Android Node.js host through its internal Feather Engine.</string>
@@ -86,6 +110,9 @@
     <string name="st_download_progress_known">%1$s / %2$s</string>
     <string name="st_download_progress_unknown">Downloaded %1$s</string>
     <string name="st_download_cancel">Cancel download</string>
+    <string name="st_runtime_download_title">Downloading signed runtime layer</string>
+    <string name="st_runtime_download_progress">%1$d%% · %2$s / %3$s</string>
+    <string name="st_runtime_download_speed">Current speed: %1$s/s</string>
     <string name="st_downloaded_title">External download cache</string>
     <string name="st_downloaded_empty">No ST archives have been downloaded.</string>
     <string name="st_downloaded_file_detail">%1$s · %2$s</string>
@@ -97,9 +124,19 @@
     <string name="st_download_zip_hint">Early ZIP format hint</string>
     <string name="st_download_zip_hint_present">PK header present; this is not full ZIP validation.</string>
     <string name="st_download_zip_hint_missing">PK header missing; archive format is unidentified.</string>
-    <string name="st_downloaded_not_installed_note">Downloaded archives remain external cache entries until you choose Install. Core performs all work in private staging, preferring a matching signed runtime layer and using one-time local construction only as a fallback. A READY slot is committed only after runnable acceptance. Deleting cache does not delete Core slots or user data.</string>
+    <string name="st_downloaded_not_installed_note">Downloaded archives remain external cache entries until you choose Install. Core first tries a matching signed runtime layer. If it cannot be obtained, STM stops and lets you retry or explicitly choose slow local construction. A READY slot is committed only after runnable acceptance. Deleting cache does not delete Core slots or user data.</string>
     <string name="st_download_core_install">Install with Core</string>
-    <string name="st_download_core_install_note">Core first tries a signed runtime layer that exactly matches this ST version. If no usable prebuilt layer is available, it uses its bundled npm tool to build locally. Both paths run staged acceptance before atomically committing the READY slot.</string>
+    <string name="st_download_core_install_note">Core first tries a signed runtime layer that exactly matches this ST version. It never starts the slower bundled npm construction without your explicit confirmation. Both paths run staged acceptance before atomically committing the READY slot.</string>
+    <string name="st_install_fast_unavailable_title">Fast installation is unavailable</string>
+    <string name="st_install_transport_unavailable_body">STM could not download the signed runtime layer. Check the active network, DNS, proxy, or VPN, then retry. You can also explicitly choose slower local construction.</string>
+    <string name="st_install_not_available_body">STM does not currently provide a signed runtime layer for this exact SillyTavern version. You can stop here or explicitly build the runtime locally.</string>
+    <string name="st_install_retry_fast">Check network and retry</string>
+    <string name="st_install_use_local">Use local construction</string>
+    <string name="st_install_local_warning">Local construction downloads and processes many npm files. It may take several minutes or longer and use substantially more storage, memory, and battery. Keep the network stable and do not force-stop STM.</string>
+    <string name="st_install_not_now">Not now</string>
+    <string name="st_install_local_confirm_title">Use slow local construction?</string>
+    <string name="st_install_local_confirm_body">STM will use its bundled npm 11.6.2 toolchain to install dependencies and build lib.js on this device. This can take several minutes or longer. Keep the network stable and avoid force-stopping STM until the operation finishes.</string>
+    <string name="st_install_local_confirm_action">Start local construction</string>
     <string name="st_download_core_preflight">Send to Core preflight</string>
     <string name="st_download_core_preflight_note">Preflight only re-hashes, safely extracts and inspects the exact source. It does not install dependencies or create a READY slot.</string>
     <string name="st_download_delete_all">Delete all downloads</string>
@@ -135,6 +172,7 @@
     <string name="st_slot_activate">Activate</string>
     <string name="st_slot_remove">Remove slot</string>
     <string name="st_slot_rollback">Rollback active pointer</string>
+    <string name="st_slot_verify_full">Full verify</string>
     <string name="st_slot_remove_confirm_title">Remove this Core slot?</string>
     <string name="st_slot_remove_confirm_body">Remove slot “%1$s” from STM Core? Active and running slots are protected, and Core user data is not removed.</string>
     <string name="st_slot_rollback_confirm_title">Request active-slot rollback?</string>
@@ -228,6 +266,15 @@
     <string name="action_cancel">Cancel</string>
     <string name="action_delete">Delete</string>
     <string name="action_dismiss">Dismiss</string>
+    <string name="wait_continue">Continue waiting</string>
+    <string name="wait_npm_title">npm is still installing dependencies</string>
+    <string name="wait_npm_body">The first 5-minute interval has elapsed. The network, npm registry, device storage, or many small-file writes may be slow. Continue waiting for another 5 minutes, or cancel and clean the staging operation.</string>
+    <string name="wait_bundle_title">lib.js is still being built</string>
+    <string name="wait_bundle_body">The 2-minute interval has elapsed. The device may be busy or low on available memory. Continue waiting for another 2 minutes, or cancel the local build.</string>
+    <string name="wait_acceptance_title">ST acceptance is still starting</string>
+    <string name="wait_acceptance_body">The 20-second interval has elapsed. ST configuration, plugins, or a busy device may be delaying its local health check. Continue waiting for another 20 seconds, or cancel installation.</string>
+    <string name="wait_start_title">ST is still starting</string>
+    <string name="wait_start_body">The 15-second interval has elapsed. ST configuration, plugins, or a busy device may be delaying startup. Continue waiting for another 15 seconds, or stop ST.</string>
 
     <string name="logs_title">Logs and technical records</string>
     <string name="logs_intro">Inspect Core state, maintenance jobs, internal slot evidence, and STM app events. These records are never presented as installed ST versions.</string>

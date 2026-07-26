@@ -39,9 +39,12 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreWorkload
 fun DashboardScreen(
     coreState: StmCoreState,
     connectionState: StmCoreConnectionState,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
+    onStartSillyTavern: () -> Unit,
+    onStopSillyTavern: () -> Unit,
     onOpenTavern: () -> Unit,
+    onOpenCore: () -> Unit,
+    onRestartCore: () -> Unit,
+    onCloseCore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -64,56 +67,23 @@ fun DashboardScreen(
         }
 
         item {
-            CoreStatusCard(coreState = coreState, connectionState = connectionState)
+            CoreStatusCard(
+                coreState = coreState,
+                connectionState = connectionState,
+                onOpenCore = onOpenCore,
+                onRestartCore = onRestartCore,
+                onCloseCore = onCloseCore,
+            )
         }
 
         item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.actions_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Button(
-                            onClick = if (coreState.canStop) onStop else onStart,
-                            enabled = connectionState == StmCoreConnectionState.CONNECTED &&
-                                (coreState.canStart || coreState.canStop),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(
-                                stringResource(
-                                    if (coreState.canStop) {
-                                        R.string.action_stop
-                                    } else {
-                                        R.string.action_start
-                                    },
-                                ),
-                            )
-                        }
-                        OutlinedButton(
-                            onClick = onOpenTavern,
-                            enabled = connectionState == StmCoreConnectionState.CONNECTED &&
-                                coreState.canOpenTavern,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(stringResource(R.string.action_open_st))
-                        }
-                    }
-                    Text(
-                        text = stringResource(R.string.action_unavailable_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            SillyTavernControlCard(
+                coreState = coreState,
+                connectionState = connectionState,
+                onStart = onStartSillyTavern,
+                onStop = onStopSillyTavern,
+                onOpen = onOpenTavern,
+            )
         }
 
         item {
@@ -126,6 +96,9 @@ fun DashboardScreen(
 private fun CoreStatusCard(
     coreState: StmCoreState,
     connectionState: StmCoreConnectionState,
+    onOpenCore: () -> Unit,
+    onRestartCore: () -> Unit,
+    onCloseCore: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -147,20 +120,42 @@ private fun CoreStatusCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                StatusBadge(runState = coreState.runState)
+                StateTextBadge(
+                    text = stringResource(
+                        when (connectionState) {
+                            StmCoreConnectionState.CONNECTED -> R.string.core_health_healthy
+                            StmCoreConnectionState.CONNECTING -> R.string.core_health_connecting
+                            StmCoreConnectionState.DISCONNECTED -> R.string.core_health_disconnected
+                            StmCoreConnectionState.CLOSED -> R.string.core_health_closed
+                        },
+                    ),
+                )
             }
             Text(
-                text = stringResource(coreState.runState.titleRes()),
+                text = stringResource(
+                    if (connectionState == StmCoreConnectionState.CONNECTED) {
+                        R.string.core_health_healthy
+                    } else if (connectionState == StmCoreConnectionState.CLOSED) {
+                        R.string.core_health_closed
+                    } else {
+                        R.string.core_health_unavailable
+                    },
+                ),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
             if (connectionState != StmCoreConnectionState.CONNECTED) {
                 Text(
                     text = stringResource(
-                        if (connectionState == StmCoreConnectionState.CONNECTING) {
-                            R.string.core_connection_connecting
-                        } else {
-                            R.string.core_connection_disconnected
+                        when (connectionState) {
+                            StmCoreConnectionState.CONNECTING ->
+                                R.string.core_connection_connecting
+                            StmCoreConnectionState.DISCONNECTED ->
+                                R.string.core_connection_disconnected
+                            StmCoreConnectionState.CLOSED ->
+                                R.string.core_connection_closed
+                            StmCoreConnectionState.CONNECTED ->
+                                error("Connected Core has no disconnected message")
                         },
                     ),
                     style = MaterialTheme.typography.bodyMedium,
@@ -188,8 +183,137 @@ private fun CoreStatusCard(
                 value = coreState.revision.takeIf { it > 0 }?.toString()
                     ?: stringResource(R.string.not_available),
             )
+            InfoRow(
+                label = stringResource(R.string.feather_engine_health),
+                value = stringResource(coreState.runState.titleRes()),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (connectionState == StmCoreConnectionState.CLOSED) {
+                    Button(
+                        onClick = onOpenCore,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.action_open_core))
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onRestartCore,
+                        enabled = connectionState == StmCoreConnectionState.CONNECTED,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.action_restart_core))
+                    }
+                    OutlinedButton(
+                        onClick = onCloseCore,
+                        enabled = connectionState == StmCoreConnectionState.CONNECTED,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.action_close_core))
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun SillyTavernControlCard(
+    coreState: StmCoreState,
+    connectionState: StmCoreConnectionState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    val version = coreState.activeSillyTavernVersion()
+    val running = coreState.workload == StmCoreWorkload.SILLY_TAVERN &&
+        coreState.runState in setOf(
+            StmCoreRunState.STARTING,
+            StmCoreRunState.RUNNING,
+            StmCoreRunState.DRAINING,
+        )
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.st_runtime_controls_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = when {
+                    version == null -> stringResource(R.string.st_runtime_no_active)
+                    running -> stringResource(R.string.st_runtime_running_version, version)
+                    else -> stringResource(R.string.st_runtime_stopped_version, version)
+                },
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = stringResource(
+                    when {
+                        coreState.runState == StmCoreRunState.STARTING && running ->
+                            R.string.st_runtime_status_starting
+                        coreState.runState == StmCoreRunState.RUNNING && running ->
+                            R.string.st_runtime_status_running
+                        coreState.runState == StmCoreRunState.DRAINING && running ->
+                            R.string.st_runtime_status_stopping
+                        else -> R.string.st_runtime_status_stopped
+                    },
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Button(
+                    onClick = if (coreState.canStop && running) onStop else onStart,
+                    enabled = connectionState == StmCoreConnectionState.CONNECTED &&
+                        version != null &&
+                        ((coreState.canStop && running) || coreState.canStart),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        stringResource(
+                            if (coreState.canStop && running) {
+                                R.string.action_stop_st
+                            } else {
+                                R.string.action_start_st
+                            },
+                        ),
+                    )
+                }
+                OutlinedButton(
+                    onClick = onOpen,
+                    enabled = connectionState == StmCoreConnectionState.CONNECTED &&
+                        coreState.canOpenTavern,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(R.string.action_open_st))
+                }
+            }
+            Text(
+                text = stringResource(R.string.action_unavailable_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun StmCoreState.activeSillyTavernVersion(): String? {
+    val active = activeSlot ?: return null
+    return slots.singleOrNull {
+        it.id == active.slotId &&
+            it.revision == active.slotRevision &&
+            it.artifact?.kind == StmCoreArtifactKind.SILLY_TAVERN_SOURCE
+    }?.artifact?.stVersion
 }
 
 @Composable
@@ -338,6 +462,21 @@ private fun StatusBadge(runState: StmCoreRunState) {
     ) {
         Text(
             text = stringResource(runState.shortLabelRes()),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+}
+
+@Composable
+private fun StateTextBadge(text: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraLarge,
+    ) {
+        Text(
+            text = text,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             style = MaterialTheme.typography.labelLarge,
         )
