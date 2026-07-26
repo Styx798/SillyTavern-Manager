@@ -89,6 +89,10 @@ fun StmApp(
     settings: AppSettings,
     onThemeModeSelected: (ThemeMode) -> Unit,
     onLanguageSelected: (AppLanguage) -> Unit,
+    startInTavern: Boolean = false,
+    startInVersions: Boolean = false,
+    startInSettings: Boolean = false,
+    onOpenCompleteRemoval: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val stmCoreState by viewModel.stmCoreState.collectAsStateWithLifecycle()
@@ -98,7 +102,20 @@ fun StmApp(
     val appFilesState by viewModel.appFilesState.collectAsStateWithLifecycle()
     val diagnosticLogExportState by viewModel.diagnosticLogExportState
         .collectAsStateWithLifecycle()
-    var destinationName by rememberSaveable { mutableStateOf(StmDestination.DASHBOARD.name) }
+    var destinationName by rememberSaveable(
+        startInTavern,
+        startInVersions,
+        startInSettings,
+    ) {
+        mutableStateOf(
+            when {
+                startInTavern -> StmDestination.TAVERN.name
+                startInVersions -> StmDestination.VERSIONS.name
+                startInSettings -> StmDestination.SETTINGS.name
+                else -> StmDestination.DASHBOARD.name
+            },
+        )
+    }
     val destination = StmDestination.entries
         .firstOrNull { it.name == destinationName }
         ?: StmDestination.DASHBOARD
@@ -314,6 +331,7 @@ fun StmApp(
                             viewModel.openAppFiles()
                             destinationName = StmDestination.FILES.name
                         },
+                        onOpenCompleteRemoval = onOpenCompleteRemoval,
                         modifier = Modifier.padding(innerPadding),
                     )
 

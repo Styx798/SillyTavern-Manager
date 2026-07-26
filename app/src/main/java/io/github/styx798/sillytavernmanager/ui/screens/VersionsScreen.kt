@@ -157,7 +157,15 @@ fun VersionsScreen(
                     Text(text = stringResource(R.string.st_install_local_confirm_title))
                 },
                 text = {
-                    Text(text = stringResource(R.string.st_install_local_confirm_body))
+                    Text(
+                        text = stringResource(
+                            if (archive.channel == StDownloadChannel.PREVIEW) {
+                                R.string.st_install_preview_local_confirm_body
+                            } else {
+                                R.string.st_install_local_confirm_body
+                            },
+                        ),
+                    )
                 },
                 confirmButton = {
                     TextButton(
@@ -280,10 +288,12 @@ fun VersionsScreen(
                 canPrepare = canPrepare,
                 onImport = onImportDownloadedArchive,
                 onInstall = { archive ->
-                    onInstallDownloadedArchive(
-                        archive,
-                        StmCoreInstallMode.FAST_SIGNED_RUNTIME,
-                    )
+                    val policy = archive.channel.installPolicy()
+                    if (policy.requiresUserConfirmation) {
+                        pendingLocalBuildSlotId = archive.coreSlotIdOrNull()
+                    } else {
+                        onInstallDownloadedArchive(archive, policy.mode)
+                    }
                 },
                 onDelete = onDeleteDownload,
                 onDeleteAll = onDeleteAllDownloads,
@@ -1009,6 +1019,14 @@ private fun DownloadChannelButton(
                 },
                 style = MaterialTheme.typography.bodySmall,
             )
+            if (channel == StDownloadChannel.PREVIEW) {
+                Text(
+                    text = stringResource(R.string.st_download_preview_warning),
+                    modifier = Modifier.padding(top = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }
@@ -1179,6 +1197,7 @@ private fun DownloadedArchivesCard(
                     StArchiveIntegrityClassification.CONTENT_SHA256_RECORDED &&
                     archive.trust == StArchiveTrust.DEGRADED_UNSIGNED_CATALOG
                 ) {
+                    val installPolicy = archive.channel.installPolicy()
                     Button(
                         onClick = { onInstall(archive) },
                         modifier = Modifier
@@ -1186,10 +1205,24 @@ private fun DownloadedArchivesCard(
                             .padding(top = 14.dp),
                         enabled = canPrepare,
                     ) {
-                        Text(text = stringResource(R.string.st_download_core_install))
+                        Text(
+                            text = stringResource(
+                                if (installPolicy.requiresUserConfirmation) {
+                                    R.string.st_download_preview_local_install
+                                } else {
+                                    R.string.st_download_core_install
+                                },
+                            ),
+                        )
                     }
                     Text(
-                        text = stringResource(R.string.st_download_core_install_note),
+                        text = stringResource(
+                            if (installPolicy.requiresUserConfirmation) {
+                                R.string.st_download_preview_install_note
+                            } else {
+                                R.string.st_download_core_install_note
+                            },
+                        ),
                         modifier = Modifier.padding(top = 8.dp),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1231,6 +1264,23 @@ private fun DownloadedArchivesCard(
 
 private fun DownloadedStArchive.coreSlotIdOrNull(): String? =
     identity.exactCommit?.let { commit -> "st-${channel.branch}-${commit.lowercase()}" }
+
+internal data class StDownloadInstallPolicy(
+    val mode: StmCoreInstallMode,
+    val requiresUserConfirmation: Boolean,
+)
+
+internal fun StDownloadChannel.installPolicy(): StDownloadInstallPolicy = when (this) {
+    StDownloadChannel.STABLE -> StDownloadInstallPolicy(
+        mode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+        requiresUserConfirmation = false,
+    )
+
+    StDownloadChannel.PREVIEW -> StDownloadInstallPolicy(
+        mode = StmCoreInstallMode.LOCAL_NPM_BUILD,
+        requiresUserConfirmation = true,
+    )
+}
 
 private const val PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE =
     "PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE"

@@ -291,6 +291,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             copy(
                 operationId = null,
                 sessionId = null,
+                webSessionCredential = null,
                 runState = StmCoreRunState.STOPPED,
                 runningSlot = null,
                 localBaseUrl = null,
@@ -337,13 +338,19 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
         val runsSillyTavern =
             active != null && activeSlot?.artifact?.kind == StmCoreArtifactKind.SILLY_TAVERN_SOURCE
+        val webSessionCredential = if (runsSillyTavern) {
+            StmCoreWebSessionCredential.generate()
+        } else {
+            null
+        }
         if (runsSillyTavern) {
             ensureSessionForeground(requireNotNull(activeSlot).artifact?.stVersion)
         }
         publish(afterDurableCommit = { committed ->
             if (state.sessionId != sessionId ||
                 state.runState != StmCoreRunState.STARTING ||
-                committed.sessionId != sessionId
+                committed.sessionId != sessionId ||
+                committed.webSessionCredential != webSessionCredential
             ) {
                 return@publish
             }
@@ -383,6 +390,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                         sessionDirectory = sessionDirectory,
                         logsRoot = StmCorePaths.logsRoot(this),
                         expectedVersion = version,
+                        webSessionCredential = requireNotNull(webSessionCredential),
                     )
                     engine.start(sessionId, sessionDirectory, prepared.launchSpec)
                 } else {
@@ -400,6 +408,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             copy(
                 operationId = operationId,
                 sessionId = sessionId,
+                webSessionCredential = webSessionCredential,
                 runState = StmCoreRunState.STARTING,
                 workload = if (runsSillyTavern) {
                     StmCoreWorkload.SILLY_TAVERN
@@ -512,6 +521,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         publish {
             copy(
                 runState = StmCoreRunState.CRASHED,
+                webSessionCredential = null,
                 localBaseUrl = null,
                 port = null,
                 summary = summary,
@@ -602,7 +612,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         deadClients.forEach(clients::remove)
         deadClients.forEach(::removeClientDeathRecipient)
         if (deadClients.isNotEmpty() && clients.isEmpty()) {
-            beginOwnerLossShutdown("The STM app process disconnected")
+            handleUnexpectedClientLoss("The STM app process disconnected")
         }
     }
 
@@ -636,7 +646,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 clients.remove(binder)
                 removeClientDeathRecipient(binder)
                 if (clients.isEmpty()) {
-                    beginOwnerLossShutdown("The STM app process ended")
+                    handleUnexpectedClientLoss("The STM app process ended")
                 }
             }
         }
@@ -655,7 +665,9 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         } catch (_: RemoteException) {
             clients.remove(binder)
             removeClientDeathRecipient(binder)
-            if (clients.isEmpty()) beginOwnerLossShutdown("The STM app process disconnected")
+            if (clients.isEmpty()) {
+                handleUnexpectedClientLoss("The STM app process disconnected")
+            }
         }
     }
 
@@ -1002,6 +1014,15 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
         Log.i(TAG, "owner_lost; shutting down Core: $reason")
         beginCoreShutdown(UUID.randomUUID().toString(), CoreShutdownMode.CLOSE)
+    }
+
+    private fun handleUnexpectedClientLoss(reason: String) {
+        if (!initializationComplete || processTerminationScheduled || shutdownMode != null) return
+        if (shouldRetainCoreForAppReconnect(state, foregroundActive)) {
+            Log.i(TAG, "owner_lost; retaining active SillyTavern for App reconnect: $reason")
+            return
+        }
+        beginOwnerLossShutdown(reason)
     }
 
     private fun maybeFinishCoreShutdown() {
@@ -1623,6 +1644,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     localBaseUrl = null,
                     port = null,
                     sessionId = if (interrupted) previous.sessionId else null,
+                    webSessionCredential = null,
                     summary = if (revisionEpochReset) {
                         "STM Core revision counter started a new process epoch"
                     } else if (interrupted) {
@@ -1758,6 +1780,17 @@ internal fun shouldApplyRecoveredTerminalJob(existing: StmCoreJob?): Boolean =
         StmCoreJobState.FAILED,
         StmCoreJobState.CANCELLED,
     )
+
+internal fun shouldRetainCoreForAppReconnect(
+    state: StmCoreState,
+    foregroundActive: Boolean,
+): Boolean =
+    foregroundActive &&
+        state.workload == StmCoreWorkload.SILLY_TAVERN &&
+        state.runState in setOf(
+            StmCoreRunState.STARTING,
+            StmCoreRunState.RUNNING,
+        )
 
 internal fun nextCoreRevisionOrNull(current: Long): Long? {
     require(current > 0) { "Core revision must be positive" }

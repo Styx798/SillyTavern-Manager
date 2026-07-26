@@ -10,6 +10,8 @@ import io.github.styx798.sillytavernmanager.stmcore.FeatherEngine
 import io.github.styx798.sillytavernmanager.stmcore.LoopbackHealthProbe
 import io.github.styx798.sillytavernmanager.stmcore.LoopbackProbeResult
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
+import io.github.styx798.sillytavernmanager.stmcore.STM_CORE_WEB_SESSION_COOKIE_NAME
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWebSessionCredential
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import io.github.styx798.sillytavernmanager.stmcore.StmNodeRuntimeFactory
 import io.github.styx798.sillytavernmanager.stmcore.StmSillyTavernLaunchFactory
@@ -639,6 +641,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
         val data = freshDirectory(operation, ACCEPTANCE_DATA_DIRECTORY)
         val session = freshDirectory(operation, ACCEPTANCE_SESSION_DIRECTORY)
         val logs = freshDirectory(operation, ACCEPTANCE_LOGS_DIRECTORY)
+        val webSessionCredential = StmCoreWebSessionCredential.generate()
         val programBefore = when (programPolicy) {
             StmRunnableAcceptanceProgramPolicy.STRICT_TREE_UNCHANGED ->
                 scanTree(program, false, "", cancellation).sha256
@@ -651,6 +654,7 @@ internal class StmDeviceLocalNpmSlotPreparer(
             sessionDirectory = session.toFile(),
             logsRoot = logs.toFile(),
             expectedVersion = request.stVersion,
+            webSessionCredential = webSessionCredential,
         )
         val callback = AcceptanceCallback()
         val engine = FeatherEngine(callback)
@@ -677,18 +681,22 @@ internal class StmDeviceLocalNpmSlotPreparer(
                 "Staged SillyTavern listened on $port instead of ${prepared.selectedPort}"
             }
             val base = "http://127.0.0.1:$port"
-            val version = LoopbackHealthProbe.capture(base, "/version")
+            val version = LoopbackHealthProbe.capture(
+                baseUrl = base,
+                path = "/version",
+                cookie = "$STM_CORE_WEB_SESSION_COOKIE_NAME=${webSessionCredential.value}",
+            )
             check(version is LoopbackProbeResult.Healthy) {
                 "Staged SillyTavern /version acceptance failed"
             }
-            val home = httpGet("$base/")
+            val home = httpGet("$base/", webSessionCredential)
             check(
                 home.code == 200 &&
                     home.body.toString(Charsets.UTF_8).contains("<title>SillyTavern</title>"),
             ) {
                 "Staged SillyTavern homepage acceptance failed"
             }
-            val servedBundle = httpGet("$base/lib.js")
+            val servedBundle = httpGet("$base/lib.js", webSessionCredential)
             check(
                 servedBundle.code == 200 &&
                     servedBundle.body.size.toLong() == expectedBundle.bytes &&
@@ -1467,11 +1475,18 @@ internal class StmDeviceLocalNpmSlotPreparer(
         })();
         """.trimIndent()
 
-    private fun httpGet(url: String): HttpEvidence {
+    private fun httpGet(
+        url: String,
+        webSessionCredential: StmCoreWebSessionCredential,
+    ): HttpEvidence {
         val connection = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
         connection.connectTimeout = HTTP_TIMEOUT_MILLIS
         connection.readTimeout = HTTP_TIMEOUT_MILLIS
         connection.instanceFollowRedirects = false
+        connection.setRequestProperty(
+            "Cookie",
+            "$STM_CORE_WEB_SESSION_COOKIE_NAME=${webSessionCredential.value}",
+        )
         return try {
             val code = connection.responseCode
             val input = if (code >= 400) connection.errorStream else connection.inputStream

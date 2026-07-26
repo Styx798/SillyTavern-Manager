@@ -58,7 +58,11 @@ internal object LoopbackHealthProbe {
         }
     }
 
-    fun capture(baseUrl: String, path: String): LoopbackProbeResult {
+    fun capture(
+        baseUrl: String,
+        path: String,
+        cookie: String? = null,
+    ): LoopbackProbeResult {
         val endpoint = try {
             URI(baseUrl)
         } catch (error: Exception) {
@@ -68,6 +72,13 @@ internal object LoopbackHealthProbe {
             require(endpoint.host == "127.0.0.1" && endpoint.port in 1..65_535) {
                 "Health endpoint must be an IPv4 loopback URL with an explicit port"
             }
+            require(cookie == null || (
+                cookie.length in 1..256 &&
+                    cookie.all { character -> character.code in 0x21..0x7e && character != ';' }
+                )
+            ) {
+                "Health cookie contains an unsafe HTTP header value"
+            }
             val rawBytes = Socket().use { socket ->
                 socket.connect(InetSocketAddress(endpoint.host, endpoint.port), TIMEOUT_MILLIS)
                 socket.soTimeout = TIMEOUT_MILLIS
@@ -75,7 +86,9 @@ internal object LoopbackHealthProbe {
                     "GET $path HTTP/1.1\r\n" +
                         "Host: 127.0.0.1:${endpoint.port}\r\n" +
                         "Connection: close\r\n" +
-                        "Accept: application/json\r\n\r\n"
+                        "Accept: application/json\r\n" +
+                        cookie?.let { "Cookie: $it\r\n" }.orEmpty() +
+                        "\r\n"
                 socket.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
                 socket.getOutputStream().flush()
                 socket.getInputStream().readBytes()

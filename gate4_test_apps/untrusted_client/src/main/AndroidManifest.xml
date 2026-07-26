@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <queries>
+        <package android:name="io.github.styx798.sillytavernmanager" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="STM Gate 4 untrusted client" />
+
+</manifest>

@@ -17,6 +17,7 @@ class StmSillyTavernLaunchFactoryTest {
     fun `real launch isolates mutable paths and installs runtime webpack hard gate`() {
         val fixture = fixture()
         val originalAdapter = fixture.adapter.readBytes()
+        val webSessionCredential = StmCoreWebSessionCredential.generate()
 
         val prepared = StmSillyTavernLaunchFactory.prepare(
             slotRoot = fixture.slot,
@@ -25,6 +26,7 @@ class StmSillyTavernLaunchFactoryTest {
             sessionDirectory = fixture.session,
             logsRoot = fixture.logs,
             expectedVersion = "1.18.0",
+            webSessionCredential = webSessionCredential,
         )
 
         val arguments = prepared.launchSpec.consoleArguments.toList()
@@ -51,6 +53,11 @@ class StmSillyTavernLaunchFactoryTest {
         assertTrue(bootstrap.contains("timingSafeEqual"))
         assertTrue(bootstrap.contains("/node_modules/webpack/"))
         assertTrue(bootstrap.contains("/node_modules/terser-webpack-plugin/"))
+        assertTrue(bootstrap.contains(STM_CORE_WEB_SESSION_COOKIE_NAME))
+        assertTrue(bootstrap.contains("requestIsAuthorized"))
+        assertTrue(bootstrap.contains("403 Forbidden"))
+        assertTrue(bootstrap.contains("event === 'upgrade'"))
+        assertEquals("StmCoreWebSessionCredential([redacted])", webSessionCredential.toString())
     }
 
     @Test
@@ -68,6 +75,7 @@ class StmSillyTavernLaunchFactoryTest {
             sessionDirectory = fixture.session,
             logsRoot = fixture.logs,
             expectedVersion = "1.18.0",
+            webSessionCredential = StmCoreWebSessionCredential.generate(),
         )
 
         assertEquals("port: 9123\n", config.readText())
@@ -93,6 +101,7 @@ class StmSillyTavernLaunchFactoryTest {
                 sessionDirectory = fixture.session,
                 logsRoot = fixture.logs,
                 expectedVersion = "1.18.0",
+                webSessionCredential = StmCoreWebSessionCredential.generate(),
             )
         }
         assertEquals("sentinel\n", outside.readText())

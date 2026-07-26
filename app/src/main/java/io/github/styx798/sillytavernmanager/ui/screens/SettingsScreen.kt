@@ -12,11 +12,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,8 +40,33 @@ internal fun SettingsScreen(
     onThemeModeSelected: (ThemeMode) -> Unit,
     onLanguageSelected: (AppLanguage) -> Unit,
     onOpenFiles: () -> Unit,
+    onOpenCompleteRemoval: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var confirmCompleteRemoval by rememberSaveable { mutableStateOf(false) }
+    if (confirmCompleteRemoval) {
+        AlertDialog(
+            onDismissRequest = { confirmCompleteRemoval = false },
+            title = { Text(stringResource(R.string.settings_complete_removal_confirm_title)) },
+            text = { Text(stringResource(R.string.settings_complete_removal_confirm_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmCompleteRemoval = false
+                        onOpenCompleteRemoval()
+                    },
+                ) {
+                    Text(stringResource(R.string.settings_complete_removal_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmCompleteRemoval = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -105,6 +136,16 @@ internal fun SettingsScreen(
                 title = stringResource(R.string.settings_files_entry_title),
                 summary = stringResource(R.string.settings_files_entry_summary),
                 onClick = onOpenFiles,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        SettingsSection(title = stringResource(R.string.settings_complete_removal_title)) {
+            SettingsAction(
+                title = stringResource(R.string.settings_complete_removal_action),
+                summary = stringResource(R.string.settings_complete_removal_summary),
+                onClick = { confirmCompleteRemoval = true },
             )
         }
 

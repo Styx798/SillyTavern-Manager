@@ -486,7 +486,9 @@ private class FeatherEngineSession(
 
     private companion object {
         const val EVENT_LOOP_TICK_MILLIS = 10L
-        const val ENGINE_GRACEFUL_DEADLINE_MILLIS = 3_000L
+        // Core owns the user-visible 15-second graceful boundary and escalation policy.
+        // Keep the Engine's internal guard later so it cannot race that watchdog into CRASHED.
+        const val ENGINE_GRACEFUL_DEADLINE_MILLIS = 16_000L
         const val DESTROY_GRACE_SECONDS = 1L
         const val DESTROY_FORCE_SECONDS = 9L
     }
