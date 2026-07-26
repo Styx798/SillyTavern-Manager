@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">开发版本 v0.0.1</string>
+    <string name="app_subtitle">开发版本 v0.0.2</string>
 
     <string name="nav_dashboard">主页</string>
     <string name="nav_tavern">酒馆</string>
@@ -13,11 +13,11 @@
     <string name="dashboard_title">总览</string>
     <string name="dashboard_intro">查看 STM Core 状态，并管理 SillyTavern 下载归档。</string>
     <string name="runtime_status_title">STM Core 状态</string>
-    <string name="runtime_stopped">STM Core 已停止</string>
-    <string name="runtime_starting">STM Core 正在启动</string>
-    <string name="runtime_running">STM Core 正在运行</string>
-    <string name="runtime_stopping">STM Core 正在排空</string>
-    <string name="runtime_error">STM Core 运行出错</string>
+    <string name="runtime_stopped">Feather Engine 处于待机</string>
+    <string name="runtime_starting">Feather Engine 正在启动</string>
+    <string name="runtime_running">Feather Engine 正在运行</string>
+    <string name="runtime_stopping">Feather Engine 正在排空并停止</string>
+    <string name="runtime_error">Feather Engine 运行出错</string>
     <string name="runtime_badge_not_installed">未安装</string>
     <string name="runtime_badge_stopped">已停止</string>
     <string name="runtime_badge_starting">启动中</string>
@@ -27,7 +27,7 @@
     <string name="installed_version">Core 组件</string>
     <string name="core_revision">快照版本</string>
     <string name="not_available">暂无</string>
-    <string name="core_summary_ready">STM Core 已就绪，可以启动 Feather Engine 诊断会话。</string>
+    <string name="core_summary_ready">STM Core 健康并处于待机；Feather Engine 当前空闲。</string>
     <string name="core_summary_ready_st">STM Core 已就绪，可以启动当前已签名的 SillyTavern 版本。</string>
     <string name="core_summary_recovering">STM Core 正在恢复并核对持久安装状态。</string>
     <string name="core_summary_starting">正在创建一次性的 Feather Engine 会话。</string>
@@ -39,6 +39,13 @@
     <string name="core_error_process_disconnected">STM Core 私有进程意外断开。</string>
     <string name="core_connection_connecting">Core 连接正在初始化；上一个快照不代表当前健康状态。</string>
     <string name="core_connection_disconnected">Core 已断开；当前显示的是历史快照，所有控制均已禁用。</string>
+    <string name="core_connection_closed">你已关闭 Core；重新打开后才能继续使用 STM 管理功能。</string>
+    <string name="core_health_healthy">Core 健康</string>
+    <string name="core_health_connecting">正在连接</string>
+    <string name="core_health_disconnected">连接已断开</string>
+    <string name="core_health_closed">Core 已关闭</string>
+    <string name="core_health_unavailable">无法确认 Core 健康状态</string>
+    <string name="feather_engine_health">Feather Engine 健康状态</string>
     <string name="core_error_process_restarted">STM Core 在活动会话期间重启，现已恢复到一致状态。</string>
     <string name="core_error_checkpoint_corrupt">STM Core 无法恢复状态检查点。</string>
     <string name="core_error_engine_failure">Feather Engine 会话运行失败。</string>
@@ -51,8 +58,25 @@
     <string name="actions_title">操作</string>
     <string name="action_start">启动</string>
     <string name="action_stop">停止</string>
+    <string name="action_start_st">启动 ST</string>
+    <string name="action_stop_st">停止 ST</string>
     <string name="action_open_st">进入 ST</string>
-    <string name="action_unavailable_hint">安装或激活一个可运行的 ST 版本，再启动 Core 即可进入 App 内 ST。Core 优先使用匹配的签名运行层，仅在没有可用预构筑层时回退到一次性本机构筑。</string>
+    <string name="action_open_core">打开 Core</string>
+    <string name="action_restart_core">重启 Core</string>
+    <string name="action_close_core">关闭 Core</string>
+    <string name="action_unavailable_hint">STM 打开后 Core 只进入待机；ST 仅在你主动启动后运行，并会在切换 STM 页面时持续运行，直到你主动停止。</string>
+    <string name="st_runtime_controls_title">SillyTavern 管理</string>
+    <string name="st_runtime_no_active">没有活动 ST 版本</string>
+    <string name="st_runtime_running_version">正在运行 ST %1$s</string>
+    <string name="st_runtime_stopped_version">ST %1$s 已停止</string>
+    <string name="st_runtime_status_starting">正在启动并等待本机健康检查。</string>
+    <string name="st_runtime_status_running">本机服务会持续运行，直到你主动停止。</string>
+    <string name="st_runtime_status_stopping">正在优雅停止本机服务。</string>
+    <string name="st_runtime_status_stopped">本机服务当前没有运行。</string>
+    <string name="st_notification_permission_title">显示 ST 运行通知？</string>
+    <string name="st_notification_permission_body">ST 运行期间，Android 会使用一条低优先级通知显示本机服务仍在运行。拒绝通知权限不会阻止 ST 启动，但通知可能不会出现在通知栏。</string>
+    <string name="st_notification_permission_allow">允许通知</string>
+    <string name="st_notification_permission_without">不授权并启动</string>
 
     <string name="build_status_title">阶段 1 能力</string>
     <string name="build_status_body">STM Core 0.1 已通过内部 Feather Engine 提供独立进程 Android Node.js 宿主。</string>
@@ -86,6 +110,9 @@
     <string name="st_download_progress_known">%1$s / %2$s</string>
     <string name="st_download_progress_unknown">已下载 %1$s</string>
     <string name="st_download_cancel">取消下载</string>
+    <string name="st_runtime_download_title">正在下载签名运行层</string>
+    <string name="st_runtime_download_progress">%1$d%% · %2$s / %3$s</string>
+    <string name="st_runtime_download_speed">当前速度：%1$s/秒</string>
     <string name="st_downloaded_title">外部下载缓存</string>
     <string name="st_downloaded_empty">尚未下载任何 ST 归档。</string>
     <string name="st_downloaded_file_detail">%1$s · %2$s</string>
@@ -97,9 +124,19 @@
     <string name="st_download_zip_hint">早期 ZIP 格式提示</string>
     <string name="st_download_zip_hint_present">存在 PK 文件头；这不等于完整 ZIP 验证。</string>
     <string name="st_download_zip_hint_missing">缺少 PK 文件头，归档格式未识别。</string>
-    <string name="st_downloaded_not_installed_note">下载归档在选择“使用 Core 安装”前仍只是外部缓存。Core 会在私有 staging 中完成全部工作：优先使用匹配的签名运行层，仅在没有可用预构筑层时回退到一次性本机构筑；通过可运行验收后才原子提交 READY Slot。删除下载缓存不会删除 Core Slot 或用户数据。</string>
+    <string name="st_downloaded_not_installed_note">下载归档在选择“使用 Core 安装”前仍只是外部缓存。Core 会先尝试匹配的签名运行层；无法获取时 STM 会停止并让你重试，或由你明确选择较慢的本地构筑。通过可运行验收后才原子提交 READY Slot。删除下载缓存不会删除 Core Slot 或用户数据。</string>
     <string name="st_download_core_install">使用 Core 安装</string>
-    <string name="st_download_core_install_note">Core 会先获取与当前 ST 版本精确匹配的签名运行层；没有可用预构筑层时，才使用 APK 内置 npm 工具在本机一次性构筑。两条路径都会先完成 staging 可运行验收，再原子提交 READY Slot。</string>
+    <string name="st_download_core_install_note">Core 会先获取与当前 ST 版本精确匹配的签名运行层；未经你明确确认，绝不会自动启动较慢的 APK 内置 npm 本地构筑。两条路径都会先完成 staging 可运行验收，再原子提交 READY Slot。</string>
+    <string name="st_install_fast_unavailable_title">快速安装暂不可用</string>
+    <string name="st_install_transport_unavailable_body">STM 无法下载签名运行层。请检查当前网络、DNS、代理或 VPN 后重试；你也可以明确选择速度较慢的本地构筑。</string>
+    <string name="st_install_not_available_body">STM 目前没有为这个精确 SillyTavern 版本提供匹配的签名运行层。你可以暂不安装，或明确选择在本机完成构筑。</string>
+    <string name="st_install_retry_fast">检查网络后重试</string>
+    <string name="st_install_use_local">使用本地构筑</string>
+    <string name="st_install_local_warning">本地构筑需要下载并处理大量 npm 小文件，可能耗时数分钟甚至更久，并显著增加存储、内存和电量消耗。请保持网络稳定，不要强制关闭 STM。</string>
+    <string name="st_install_not_now">暂不安装</string>
+    <string name="st_install_local_confirm_title">使用较慢的本地构筑？</string>
+    <string name="st_install_local_confirm_body">STM 将使用 APK 内置的 npm 11.6.2 工具链安装依赖并在本机生成 lib.js。这个过程可能耗时数分钟甚至更久；完成前请保持网络稳定，不要强制关闭 STM。</string>
+    <string name="st_install_local_confirm_action">开始本地构筑</string>
     <string name="st_download_core_preflight">发送到 Core 预检</string>
     <string name="st_download_core_preflight_note">预检只会重新计算哈希、安全解压并检查精确源码，不安装依赖，也不会创建 READY Slot。</string>
     <string name="st_download_delete_all">删除全部下载</string>
@@ -135,6 +172,7 @@
     <string name="st_slot_activate">设为活动</string>
     <string name="st_slot_remove">移除 Slot</string>
     <string name="st_slot_rollback">回滚活动指针</string>
+    <string name="st_slot_verify_full">完整校验</string>
     <string name="st_slot_remove_confirm_title">移除这个 Core Slot？</string>
     <string name="st_slot_remove_confirm_body">确定从 STM Core 移除 Slot“%1$s”吗？活动与运行中的 Slot 会受到保护，Core 用户数据不会被删除。</string>
     <string name="st_slot_rollback_confirm_title">请求回滚活动 Slot？</string>
@@ -228,6 +266,15 @@
     <string name="action_cancel">取消</string>
     <string name="action_delete">删除</string>
     <string name="action_dismiss">关闭</string>
+    <string name="wait_continue">继续等待</string>
+    <string name="wait_npm_title">npm 仍在安装依赖</string>
+    <string name="wait_npm_body">第一个 5 分钟等待周期已结束。网络、npm Registry、设备存储或大量小文件写入可能较慢。你可以再等待 5 分钟，或取消并清理这次暂存操作。</string>
+    <string name="wait_bundle_title">lib.js 仍在构筑</string>
+    <string name="wait_bundle_body">2 分钟等待周期已结束。设备可能正忙或可用内存偏低。你可以再等待 2 分钟，或取消本地构筑。</string>
+    <string name="wait_acceptance_title">ST 可运行验收仍在启动</string>
+    <string name="wait_acceptance_body">20 秒等待周期已结束。ST 配置、插件或设备繁忙可能让本机健康检查变慢。你可以再等待 20 秒，或取消安装。</string>
+    <string name="wait_start_title">ST 仍在启动</string>
+    <string name="wait_start_body">15 秒等待周期已结束。ST 配置、插件或设备繁忙可能拖慢启动。你可以再等待 15 秒，或停止 ST。</string>
 
     <string name="logs_title">日志与技术记录</string>
     <string name="logs_intro">查看 Core 状态、维护任务、内部 Slot 证据和 STM 应用事件。这里的记录不会冒充已安装的 ST 版本。</string>

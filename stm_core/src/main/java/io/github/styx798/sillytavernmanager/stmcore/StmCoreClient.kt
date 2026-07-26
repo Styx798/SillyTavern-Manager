@@ -16,6 +16,8 @@ interface StmCoreClientListener {
     fun onCoreStateChanged(state: StmCoreState)
 
     fun onCoreProcessDisconnected()
+
+    fun onCoreAppTaskRemoved()
 }
 
 class StmCoreClient(
@@ -31,6 +33,7 @@ class StmCoreClient(
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            markAppTaskOwned()
             outgoingMessenger = Messenger(service)
             disconnectDelivered = false
             send(Message.obtain(null, StmCoreProtocol.MESSAGE_REGISTER_CLIENT).apply {
@@ -67,6 +70,7 @@ class StmCoreClient(
     fun connect(): Boolean {
         checkMainThread()
         if (bound) return true
+        if (!markAppTaskOwned()) return false
         disconnectDelivered = false
         bound = appContext.bindService(
             Intent(appContext, StmCoreService::class.java),
@@ -76,6 +80,16 @@ class StmCoreClient(
         return bound
     }
 
+    private fun markAppTaskOwned(): Boolean =
+        runCatching {
+            appContext.startService(
+                StmCoreService.serviceIntent(
+                    appContext,
+                    StmCoreService.ACTION_MARK_APP_TASK_OWNED,
+                ),
+            )
+        }.isSuccess
+
     fun connectAndStart(operationId: String): Boolean {
         checkMainThread()
         val command = StmCoreProtocol.commandMessage(StmCoreProtocol.MESSAGE_START, operationId)
@@ -84,6 +98,42 @@ class StmCoreClient(
         if (connect()) return true
         pendingCommands.remove(command)
         return false
+    }
+
+    fun prepareForSillyTavernStart(): Boolean {
+        checkMainThread()
+        return runCatching {
+            appContext.startForegroundService(
+                StmCoreService.serviceIntent(
+                    appContext,
+                    StmCoreService.ACTION_PREPARE_SILLY_TAVERN,
+                ),
+            )
+        }.isSuccess
+    }
+
+    fun releasePreparedSillyTavernForeground() {
+        checkMainThread()
+        runCatching {
+            appContext.startService(
+                StmCoreService.serviceIntent(
+                    appContext,
+                    StmCoreService.ACTION_RELEASE_SILLY_TAVERN_FOREGROUND,
+                ),
+            )
+        }
+    }
+
+    fun prepareForCoreShutdown(): Boolean {
+        checkMainThread()
+        return runCatching {
+            appContext.startService(
+                StmCoreService.serviceIntent(
+                    appContext,
+                    StmCoreService.ACTION_PREPARE_CORE_SHUTDOWN,
+                ),
+            )
+        }.isSuccess
     }
 
     fun requestStop(operationId: String): Boolean {
@@ -101,8 +151,15 @@ class StmCoreClient(
         slotId: String,
         cacheFileName: String,
         artifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode,
     ): Boolean = requestBoundCommand(
-        StmCoreProtocol.installMessage(operationId, slotId, cacheFileName, artifact),
+        StmCoreProtocol.installMessage(
+            operationId,
+            slotId,
+            cacheFileName,
+            artifact,
+            installMode,
+        ),
     )
 
     /** File descriptors are sent immediately and are never retained in the reconnect queue. */
@@ -130,6 +187,7 @@ class StmCoreClient(
         slotId: String,
         sourceDescriptor: ParcelFileDescriptor,
         artifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode,
     ): Boolean {
         checkMainThread()
         if (outgoingMessenger == null) return false
@@ -139,6 +197,7 @@ class StmCoreClient(
                 slotId,
                 sourceDescriptor,
                 artifact,
+                installMode,
             ),
         )
     }
@@ -170,6 +229,31 @@ class StmCoreClient(
             operationId,
             slotId,
         ),
+    )
+
+    fun requestVerifySlot(operationId: String, slotId: String): Boolean = requestBoundCommand(
+        StmCoreProtocol.targetCommandMessage(
+            StmCoreProtocol.MESSAGE_VERIFY_SLOT,
+            operationId,
+            slotId,
+        ),
+    )
+
+    fun requestContinueWaiting(operationId: String, targetOperationId: String): Boolean =
+        requestBoundCommand(
+            StmCoreProtocol.targetCommandMessage(
+                StmCoreProtocol.MESSAGE_CONTINUE_WAITING,
+                operationId,
+                targetOperationId,
+            ),
+        )
+
+    fun requestRestartCore(operationId: String): Boolean = requestBoundCommand(
+        StmCoreProtocol.commandMessage(StmCoreProtocol.MESSAGE_RESTART_CORE, operationId),
+    )
+
+    fun requestCloseCore(operationId: String): Boolean = requestBoundCommand(
+        StmCoreProtocol.commandMessage(StmCoreProtocol.MESSAGE_CLOSE_CORE, operationId),
     )
 
     fun disconnect() {
@@ -234,6 +318,10 @@ class StmCoreClient(
 
     private inner class IncomingHandler(looper: Looper) : Handler(looper) {
         override fun handleMessage(message: Message) {
+            if (message.what == StmCoreProtocol.MESSAGE_APP_TASK_REMOVED) {
+                listener.onCoreAppTaskRemoved()
+                return
+            }
             val state = StmCoreProtocol.stateFrom(message)
             if (state != null) {
                 listener.onCoreStateChanged(state)

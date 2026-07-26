@@ -52,6 +52,16 @@ internal data class StmZipExtractionPolicy(
     }
 }
 
+/**
+ * STRICT is reserved for unsigned/local inputs that need a durable per-file content manifest.
+ * SIGNED_ARCHIVE_FAST trusts a previously verified whole-archive identity, while retaining ZIP
+ * structure, path, type, size, limit and CRC enforcement during extraction.
+ */
+internal enum class StmZipExtractionMode {
+    STRICT,
+    SIGNED_ARCHIVE_FAST,
+}
+
 internal fun interface StmExtractionCancellation {
     fun isCancelled(): Boolean
 
@@ -155,6 +165,7 @@ internal class StmSafeZipExtractor(
         operationStagingRoot: File,
         policy: StmZipExtractionPolicy = StmZipExtractionPolicy(),
         cancellation: StmExtractionCancellation = StmExtractionCancellation.NONE,
+        mode: StmZipExtractionMode = StmZipExtractionMode.STRICT,
     ): StmZipExtractionResult {
         val artifactPath = artifact.toPath().toAbsolutePath().normalize()
         val operationRoot = operationStagingRoot.toPath().toAbsolutePath().normalize()
@@ -191,15 +202,24 @@ internal class StmSafeZipExtractor(
                     scratchRoot = scratchRoot,
                     policy = policy,
                     cancellation = cancellation,
+                    mode = mode,
                 )
                 Files.delete(scratchRoot)
 
-                verifyAndBuildManifest(
-                    payloadRoot = payloadRoot,
-                    plan = plan,
-                    extractedFiles = extractedFiles,
-                    cancellation = cancellation,
-                )
+                when (mode) {
+                    StmZipExtractionMode.STRICT -> verifyAndBuildManifest(
+                        payloadRoot = payloadRoot,
+                        plan = plan,
+                        extractedFiles = extractedFiles,
+                        cancellation = cancellation,
+                    )
+
+                    StmZipExtractionMode.SIGNED_ARCHIVE_FAST -> buildExtractionResult(
+                        payloadRoot = payloadRoot,
+                        plan = plan,
+                        extractedFiles = extractedFiles,
+                    )
+                }
             }
         } catch (error: Exception) {
             val primary = error.toExtractionException()
@@ -745,6 +765,7 @@ internal class StmSafeZipExtractor(
         scratchRoot: Path,
         policy: StmZipExtractionPolicy,
         cancellation: StmExtractionCancellation,
+        mode: StmZipExtractionMode,
     ): Map<String, ExtractedFile> {
         val extracted = linkedMapOf<String, ExtractedFile>()
         var totalWritten = 0L
@@ -754,7 +775,11 @@ internal class StmSafeZipExtractor(
             val scratchPath = scratchRoot.resolve(index.toString().padStart(8, '0') + PART_SUFFIX)
             val destination = resolveContained(payloadRoot, planned.relativePath)
             val crc = CRC32()
-            val sha256 = MessageDigest.getInstance(SHA_256)
+            val sha256 = if (mode == StmZipExtractionMode.STRICT) {
+                MessageDigest.getInstance(SHA_256)
+            } else {
+                null
+            }
             var fileWritten = 0L
 
             val input = zip.getInputStream(planned.archiveEntry) ?: throw StmZipExtractionException(
@@ -795,7 +820,7 @@ internal class StmSafeZipExtractor(
 
                         sink.write(buffer, 0, count)
                         crc.update(buffer, 0, count)
-                        sha256.update(buffer, 0, count)
+                        sha256?.update(buffer, 0, count)
                         fileWritten = nextFileWritten
                         totalWritten = nextTotalWritten
                     }
@@ -812,7 +837,7 @@ internal class StmSafeZipExtractor(
                         )
                     }
                     cancellation.throwIfCancelled()
-                    sink.sync()
+                    if (mode == StmZipExtractionMode.STRICT) sink.sync()
                 }
             }
 
@@ -827,10 +852,47 @@ internal class StmSafeZipExtractor(
             }
             extracted[planned.relativePath] = ExtractedFile(
                 size = fileWritten,
-                sha256 = sha256.digest().toHex(),
+                sha256 = sha256?.digest()?.toHex(),
             )
         }
         return extracted
+    }
+
+    private fun buildExtractionResult(
+        payloadRoot: Path,
+        plan: ExtractionPlan,
+        extractedFiles: Map<String, ExtractedFile>,
+    ): StmZipExtractionResult {
+        val entries = plan.nodeTypes.map { (relativePath, type) ->
+            when (type) {
+                PlannedNodeType.DIRECTORY -> StmZipManifestEntry(
+                    relativePath = relativePath,
+                    type = StmZipManifestEntryType.DIRECTORY,
+                    sizeBytes = 0,
+                    sha256 = null,
+                )
+
+                PlannedNodeType.FILE -> extractedFiles.getValue(relativePath).let { file ->
+                    StmZipManifestEntry(
+                        relativePath = relativePath,
+                        type = StmZipManifestEntryType.FILE,
+                        sizeBytes = file.size,
+                        sha256 = file.sha256,
+                    )
+                }
+            }
+        }
+        return StmZipExtractionResult(
+            payloadDirectory = payloadRoot.toFile(),
+            entries = entries,
+            fileCount = entries.count { it.type == StmZipManifestEntryType.FILE },
+            directoryCount = entries.count { it.type == StmZipManifestEntryType.DIRECTORY },
+            totalFileBytes = entries
+                .asSequence()
+                .filter { it.type == StmZipManifestEntryType.FILE }
+                .fold(0L) { total, entry -> checkedAdd(total, entry.sizeBytes) },
+            manifestSha256 = stmTreeIdentitySha256(entries),
+        )
     }
 
     private fun verifyAndBuildManifest(
@@ -968,7 +1030,7 @@ private data class ValidatedPath(
 
 private data class ExtractedFile(
     val size: Long,
-    val sha256: String,
+    val sha256: String?,
 )
 
 private fun StmExtractionCancellation.throwIfCancelled() {

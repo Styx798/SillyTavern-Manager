@@ -79,4 +79,9 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+        (application as StmApplication).container.stmCoreController.resumeAppTask()
+    }
 }

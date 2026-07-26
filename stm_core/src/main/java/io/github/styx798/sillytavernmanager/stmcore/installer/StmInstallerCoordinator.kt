@@ -5,6 +5,7 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifact
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactIntegrity
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactKind
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactTrust
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreError
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJob
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobPhase
@@ -12,6 +13,9 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobType
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlot
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlotState
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreTransferProgress
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitPrompt
 import io.github.styx798.sillytavernmanager.stmcore.requireValidArtifact
 import java.io.File
 import java.io.IOException
@@ -42,6 +46,10 @@ internal sealed interface StmInstallerEvent {
     data class RecoveryEvidence(val error: StmCoreError) : StmInstallerEvent
 
     data class RecoveryComplete(val successful: Boolean) : StmInstallerEvent
+
+    data class WaitPromptChanged(val prompt: StmCoreWaitPrompt?) : StmInstallerEvent
+
+    data class RuntimeTransferChanged(val progress: StmCoreTransferProgress?) : StmInstallerEvent
 
     data class ArtifactVerified(
         val targetId: String,
@@ -128,6 +136,7 @@ internal class StmInstallerCoordinator(
         slotRevision: Long,
         cacheFileName: String,
         requestedArtifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
     ): StmInstallerSubmission {
         val problem = runCatching {
             requireCanonicalUuid(operationId)
@@ -148,6 +157,7 @@ internal class StmInstallerCoordinator(
                 importedSource = null,
                 requestedArtifact = requestedArtifact,
                 preflightOnly = false,
+                installMode = installMode,
             )
         }
     }
@@ -177,6 +187,7 @@ internal class StmInstallerCoordinator(
                     importedSource = source,
                     requestedArtifact = requestedArtifact,
                     preflightOnly = true,
+                    installMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
                 )
             } finally {
                 runCatching { source.close() }
@@ -192,6 +203,7 @@ internal class StmInstallerCoordinator(
         slotRevision: Long,
         source: InputStream,
         requestedArtifact: StmCoreArtifact,
+        installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
     ): StmInstallerSubmission {
         val problem = runCatching {
             requireCanonicalUuid(operationId)
@@ -216,6 +228,7 @@ internal class StmInstallerCoordinator(
                     importedSource = source,
                     requestedArtifact = requestedArtifact,
                     preflightOnly = false,
+                    installMode = installMode,
                 )
             } finally {
                 runCatching { source.close() }
@@ -277,11 +290,27 @@ internal class StmInstallerCoordinator(
         runRemove(control, target, active, running)
     }
 
+    fun verifySlot(
+        operationId: String,
+        target: StmCoreSlot,
+        markBrokenOnFailure: Boolean = true,
+    ): StmInstallerSubmission = submit(operationId) { control ->
+        runVerifySlot(control, target, markBrokenOnFailure)
+    }
+
     fun cancel(targetOperationId: String): Boolean = synchronized(lock) {
         val operation = activeOperation ?: return@synchronized false
         if (operation.operationId != targetOperationId) return@synchronized false
         operation.requestCancel()
     }
+
+    fun continueWaiting(targetOperationId: String): Boolean = synchronized(lock) {
+        val operation = activeOperation ?: return@synchronized false
+        if (operation.operationId != targetOperationId) return@synchronized false
+        operation.continueWaiting()
+    }
+
+    fun hasActiveOperation(): Boolean = synchronized(lock) { activeOperation != null }
 
     /**
      * Read-only post-run verification for the frozen slot lease. Callers must keep it off the
@@ -289,6 +318,9 @@ internal class StmInstallerCoordinator(
      */
     fun verifyCommittedSlot(slotId: String): StmSlotVerificationResult =
         slotStore.verifyCommitted(slotId)
+
+    fun readCommittedSlot(slotId: String): StmSlotVerificationResult =
+        slotStore.readCommitted(slotId)
 
     /** Runs disk reconciliation off the Service main thread. */
     fun recoverAsync() {
@@ -346,12 +378,13 @@ internal class StmInstallerCoordinator(
                 "MAINTENANCE_BUSY",
                 "Another Core maintenance operation is active",
             )
-            ActiveOperation(operationId).also { activeOperation = it }
+            ActiveOperation(operationId, eventSink).also { activeOperation = it }
         }
         executor.execute {
             try {
                 action(operation)
             } finally {
+                operation.finishEphemeralState()
                 synchronized(lock) {
                     if (activeOperation === operation) activeOperation = null
                 }
@@ -368,6 +401,7 @@ internal class StmInstallerCoordinator(
         importedSource: InputStream?,
         requestedArtifact: StmCoreArtifact,
         preflightOnly: Boolean,
+        installMode: StmCoreInstallMode,
     ) {
         val startedAt = System.currentTimeMillis()
         var artifact = requestedArtifact.copy(
@@ -450,7 +484,7 @@ internal class StmInstallerCoordinator(
 
         try {
             if (!preflightOnly) {
-                when (val existing = slotStore.verifyCommitted(slotId)) {
+                when (val existing = slotStore.readCommitted(slotId)) {
                     StmSlotVerificationResult.Missing -> Unit
                     is StmSlotVerificationResult.Valid -> throw InstallerFailure(
                         "SLOT_ALREADY_EXISTS",
@@ -571,6 +605,9 @@ internal class StmInstallerCoordinator(
                         commitSha = artifact.commitSha.lowercase(),
                         stVersion = stVersion,
                         packageLockSha256 = packageLockSha256,
+                        installMode = installMode,
+                        sourceEntries = extraction.entries,
+                        observer = control.observer,
                     ),
                     cancellation = StmExtractionCancellation {
                         control.isCancelRequested || Thread.currentThread().isInterrupted
@@ -747,13 +784,14 @@ internal class StmInstallerCoordinator(
                 return
             }
             val failure = error as? InstallerFailure
+            val runtimeFailure = error as? StmRuntimeSlotPreparationException
             failInstall(
                 control,
                 job,
                 slotId,
                 slotRevision,
                 artifact,
-                failure?.code ?: "INSTALL_IO_FAILURE",
+                failure?.code ?: runtimeFailure?.code?.name ?: "INSTALL_IO_FAILURE",
                 failure?.message ?: error.safeDetail(),
                 cancelled = false,
                 reconcileTransientSlot = ownsTransientSlot,
@@ -798,7 +836,7 @@ internal class StmInstallerCoordinator(
         )
         try {
             job = beginSimpleJournal(control, job, target, startedAt)
-            val committed = when (val verification = slotStore.verifyCommitted(target.id)) {
+            val committed = when (val verification = slotStore.readCommitted(target.id)) {
                 is StmSlotVerificationResult.Valid -> verification.slot
                 StmSlotVerificationResult.Missing -> throw InstallerFailure(
                     "SLOT_MISSING",
@@ -925,6 +963,55 @@ internal class StmInstallerCoordinator(
         }
     }
 
+    private fun runVerifySlot(
+        control: ActiveOperation,
+        target: StmCoreSlot,
+        markBrokenOnFailure: Boolean,
+    ) {
+        val startedAt = System.currentTimeMillis()
+        var job = newJob(control.operationId, StmCoreJobType.VERIFY, target.id, startedAt)
+            .copy(artifact = target.artifact)
+        try {
+            job = beginSimpleJournal(control, job, target, startedAt)
+            val committed = when (val verification = slotStore.verifyCommitted(target.id)) {
+                is StmSlotVerificationResult.Valid -> verification.slot
+                StmSlotVerificationResult.Missing -> throw InstallerFailure(
+                    "SLOT_MISSING",
+                    "The selected slot is missing from disk",
+                )
+
+                is StmSlotVerificationResult.Invalid -> {
+                    if (markBrokenOnFailure) {
+                        eventSink(
+                            StmInstallerEvent.SlotChanged(
+                                target.copy(state = StmCoreSlotState.BROKEN),
+                            ),
+                        )
+                    }
+                    throw InstallerFailure("SLOT_CONTENT_INVALID", verification.detail)
+                }
+            }
+            if (
+                committed.metadata.slotRevision != target.revision ||
+                committed.manifest.manifestSha256 != target.manifestSha256
+            ) {
+                throw InstallerFailure(
+                    "SLOT_SNAPSHOT_DIVERGED",
+                    "The verified slot no longer matches the public Core snapshot",
+                )
+            }
+            eventSink(StmInstallerEvent.SlotChanged(committed.toCoreSlot()))
+            finishJournal(
+                control,
+                job,
+                StmInstallerJournalPhase.COMPLETE,
+                StmCoreJobState.SUCCEEDED,
+            )
+        } catch (error: Exception) {
+            failSimple(control, job, error)
+        }
+    }
+
     private fun beginSimpleJournal(
         control: ActiveOperation,
         job: StmCoreJob,
@@ -947,10 +1034,10 @@ internal class StmInstallerCoordinator(
             ),
         )
         return job.copy(
-            phase = if (job.type == StmCoreJobType.REMOVE) {
-                StmCoreJobPhase.REMOVING_SLOT
-            } else {
-                StmCoreJobPhase.SWITCHING_ACTIVE
+            phase = when (job.type) {
+                StmCoreJobType.REMOVE -> StmCoreJobPhase.REMOVING_SLOT
+                StmCoreJobType.VERIFY -> StmCoreJobPhase.VALIDATING
+                else -> StmCoreJobPhase.SWITCHING_ACTIVE
             },
             state = StmCoreJobState.RUNNING,
             updatedAtEpochMs = now,
@@ -1052,7 +1139,7 @@ internal class StmInstallerCoordinator(
         val now = System.currentTimeMillis()
         val error = StmCoreError("installer", code, detail.take(200), detail.take(500))
         if (reconcileTransientSlot) {
-            when (val committed = slotStore.verifyCommitted(slotId)) {
+            when (val committed = slotStore.readCommitted(slotId)) {
                 StmSlotVerificationResult.Missing ->
                     eventSink(StmInstallerEvent.SlotRemoved(slotId))
 
@@ -1365,7 +1452,7 @@ internal class StmInstallerCoordinator(
         )
         return when (record.type) {
             StmInstallerOperationType.INSTALL -> {
-                val slot = slotStore.verifyCommitted(record.targetSlotId)
+                val slot = slotStore.readCommitted(record.targetSlotId)
                 if (slot is StmSlotVerificationResult.Valid &&
                     slot.slot.metadata.archiveSha256 == record.artifactSha256
                 ) {
@@ -1414,7 +1501,7 @@ internal class StmInstallerCoordinator(
             }
 
             StmInstallerOperationType.REMOVE -> {
-                if (slotStore.verifyCommitted(record.targetSlotId) == StmSlotVerificationResult.Missing) {
+                if (slotStore.readCommitted(record.targetSlotId) == StmSlotVerificationResult.Missing) {
                     DurableCompletionReconciliation.Confirmed(successReceipt)
                 } else if (journalHistory.hasLaterCompleteMutation(
                         record,
@@ -1827,11 +1914,84 @@ internal class StmInstallerCoordinator(
         })
     }
 
-    private data class ActiveOperation(
+    private class ActiveOperation(
         val operationId: String,
+        private val eventSink: (StmInstallerEvent) -> Unit,
         val controlState: AtomicReference<OperationControlState> =
             AtomicReference(OperationControlState.CANCELLABLE),
     ) {
+        private val waitLock = Any()
+        private var waitState: SoftWaitState? = null
+        private var transferActive = false
+
+        val observer: StmRuntimePreparationObserver = object : StmRuntimePreparationObserver {
+            override fun beginSoftWait(
+                kind: StmCoreWaitKind,
+                intervalMillis: Long,
+                summary: String,
+            ) {
+                require(intervalMillis > 0L)
+                synchronized(waitLock) {
+                    waitState = SoftWaitState(
+                        kind = kind,
+                        intervalMillis = intervalMillis,
+                        summary = summary,
+                        deadlineNanos = nextDeadline(intervalMillis),
+                    )
+                }
+                eventSink(StmInstallerEvent.WaitPromptChanged(null))
+            }
+
+            override fun pollSoftWait() {
+                val prompt = synchronized(waitLock) {
+                    val current = waitState ?: return@synchronized null
+                    if (current.promptVisible || System.nanoTime() < current.deadlineNanos) {
+                        return@synchronized null
+                    }
+                    current.promptVisible = true
+                    StmCoreWaitPrompt(
+                        operationId = operationId,
+                        kind = current.kind,
+                        intervalMillis = current.intervalMillis,
+                        triggeredAtEpochMs = System.currentTimeMillis(),
+                        summary = current.summary,
+                    )
+                }
+                prompt?.let { eventSink(StmInstallerEvent.WaitPromptChanged(it)) }
+            }
+
+            override fun endSoftWait() {
+                synchronized(waitLock) { waitState = null }
+                eventSink(StmInstallerEvent.WaitPromptChanged(null))
+            }
+
+            override fun onRuntimeTransfer(
+                transferredBytes: Long,
+                totalBytes: Long,
+                bytesPerSecond: Long,
+            ) {
+                synchronized(waitLock) { transferActive = true }
+                eventSink(
+                    StmInstallerEvent.RuntimeTransferChanged(
+                        StmCoreTransferProgress(
+                            operationId = operationId,
+                            transferredBytes = transferredBytes,
+                            totalBytes = totalBytes,
+                            bytesPerSecond = bytesPerSecond,
+                            updatedAtEpochMs = System.currentTimeMillis(),
+                        ),
+                    ),
+                )
+            }
+
+            override fun endRuntimeTransfer() {
+                val hadTransfer = synchronized(waitLock) {
+                    transferActive.also { transferActive = false }
+                }
+                if (hadTransfer) eventSink(StmInstallerEvent.RuntimeTransferChanged(null))
+            }
+        }
+
         val isCancelRequested: Boolean
             get() = controlState.get() == OperationControlState.CANCEL_REQUESTED
 
@@ -1874,6 +2034,39 @@ internal class StmInstallerCoordinator(
         fun throwIfCancelled() {
             if (isCancelRequested || Thread.currentThread().isInterrupted) throw OperationCancelled()
         }
+
+        fun continueWaiting(): Boolean {
+            val continued = synchronized(waitLock) {
+                val current = waitState ?: return@synchronized false
+                if (!current.promptVisible) return@synchronized false
+                current.promptVisible = false
+                current.deadlineNanos = nextDeadline(current.intervalMillis)
+                true
+            }
+            if (continued) eventSink(StmInstallerEvent.WaitPromptChanged(null))
+            return continued
+        }
+
+        fun finishEphemeralState() {
+            val hadTransfer = synchronized(waitLock) {
+                waitState = null
+                transferActive.also { transferActive = false }
+            }
+            eventSink(StmInstallerEvent.WaitPromptChanged(null))
+            if (hadTransfer) eventSink(StmInstallerEvent.RuntimeTransferChanged(null))
+        }
+
+        private fun nextDeadline(intervalMillis: Long): Long =
+            System.nanoTime() +
+                intervalMillis.coerceAtMost(Long.MAX_VALUE / 1_000_000L) * 1_000_000L
+
+        private data class SoftWaitState(
+            val kind: StmCoreWaitKind,
+            val intervalMillis: Long,
+            val summary: String,
+            var deadlineNanos: Long,
+            var promptVisible: Boolean = false,
+        )
     }
 
     private enum class OperationControlState {

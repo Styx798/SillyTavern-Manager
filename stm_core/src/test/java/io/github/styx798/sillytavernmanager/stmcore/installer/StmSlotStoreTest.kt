@@ -148,7 +148,8 @@ class StmSlotStoreTest {
         )
         assertEquals(4, byName.size)
         assertInvalidWithEvidence(byName.getValue(".DS_Store").verification)
-        assertInvalidWithEvidence(byName.getValue("slot-a").verification)
+        assertTrue(byName.getValue("slot-a").verification is StmSlotVerificationResult.Valid)
+        assertInvalidWithEvidence(fixture.store.verifyCommitted("slot-a"))
         assertTrue(byName.getValue("slot-b").verification is StmSlotVerificationResult.Valid)
         assertInvalidWithEvidence(byName.getValue("slot-link").verification)
         assertEquals("preserve", sentinel.readText())
@@ -168,6 +169,39 @@ class StmSlotStoreTest {
         val verification = fixture.store.verifyCommitted("slot-a")
         assertTrue(verification is StmSlotVerificationResult.Invalid)
         assertTrue((verification as StmSlotVerificationResult.Invalid).detail.contains("manifest"))
+    }
+
+    @Test
+    fun `full verification detects missing extra and special entries without following links`() {
+        val fixture = newFixture()
+        listOf("missing", "extra", "special").forEachIndexed { index, name ->
+            writeSyntheticPayload(
+                fixture.store,
+                "operation-$name",
+                mapOf("content.txt" to "original"),
+            )
+            fixture.store.prepareAndCommit(
+                syntheticRequest("operation-$name", "slot-$name", index.toLong() + 1L),
+            )
+        }
+        fixture.slots.resolve("slot-missing/content.txt").delete()
+        fixture.slots.resolve("slot-extra/unexpected.txt").writeText("extra")
+        val outside = fixture.root.resolve("outside-sentinel.txt").apply {
+            writeText("preserve")
+        }
+        try {
+            Files.createSymbolicLink(
+                fixture.slots.resolve("slot-special/link").toPath(),
+                outside.toPath(),
+            )
+        } catch (error: Exception) {
+            assumeNoException("The test filesystem does not support symbolic links", error)
+        }
+
+        assertInvalidWithEvidence(fixture.store.verifyCommitted("slot-missing"))
+        assertInvalidWithEvidence(fixture.store.verifyCommitted("slot-extra"))
+        assertInvalidWithEvidence(fixture.store.verifyCommitted("slot-special"))
+        assertEquals("preserve", outside.readText())
     }
 
     @Test

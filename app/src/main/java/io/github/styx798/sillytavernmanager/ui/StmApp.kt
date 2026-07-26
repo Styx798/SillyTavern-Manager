@@ -1,7 +1,12 @@
 package io.github.styx798.sillytavernmanager.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.annotation.StringRes
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +26,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -32,6 +38,7 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -42,10 +49,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.styx798.sillytavernmanager.R
 import io.github.styx798.sillytavernmanager.core.settings.AppLanguage
@@ -57,6 +66,7 @@ import io.github.styx798.sillytavernmanager.ui.screens.LogsScreen
 import io.github.styx798.sillytavernmanager.ui.screens.SettingsScreen
 import io.github.styx798.sillytavernmanager.ui.screens.TavernScreen
 import io.github.styx798.sillytavernmanager.ui.screens.VersionsScreen
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import kotlinx.coroutines.launch
 
 private enum class StmDestination(
@@ -94,6 +104,73 @@ fun StmApp(
         ?: StmDestination.DASHBOARD
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var showNotificationPermissionExplanation by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        viewModel.startCore()
+    }
+    val startSillyTavern = {
+        val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        if (needsPermission) {
+            showNotificationPermissionExplanation = true
+        } else {
+            viewModel.startCore()
+        }
+    }
+
+    if (showNotificationPermissionExplanation) {
+        AlertDialog(
+            onDismissRequest = { showNotificationPermissionExplanation = false },
+            title = { Text(stringResource(R.string.st_notification_permission_title)) },
+            text = { Text(stringResource(R.string.st_notification_permission_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showNotificationPermissionExplanation = false
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    },
+                ) {
+                    Text(stringResource(R.string.st_notification_permission_allow))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showNotificationPermissionExplanation = false
+                        viewModel.startCore()
+                    },
+                ) {
+                    Text(stringResource(R.string.st_notification_permission_without))
+                }
+            },
+        )
+    }
+
+    stmCoreState.waitPrompt?.let { prompt ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(prompt.kind.waitTitleRes())) },
+            text = { Text(stringResource(prompt.kind.waitBodyRes())) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.continueWaiting(prompt.operationId) }) {
+                    Text(stringResource(R.string.wait_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { viewModel.cancelWait(prompt.operationId, prompt.kind) },
+                ) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
 
     BackHandler(enabled = destination == StmDestination.FILES) {
         if (appFilesState.editor != null) {
@@ -185,75 +262,105 @@ fun StmApp(
                 }
             },
         ) { innerPadding ->
-            when (destination) {
-                StmDestination.DASHBOARD -> DashboardScreen(
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (destination) {
+                    StmDestination.DASHBOARD -> DashboardScreen(
+                        coreState = stmCoreState,
+                        connectionState = stmCoreConnectionState,
+                        onStartSillyTavern = startSillyTavern,
+                        onStopSillyTavern = viewModel::stopCore,
+                        onOpenTavern = { destinationName = StmDestination.TAVERN.name },
+                        onOpenCore = viewModel::openCore,
+                        onRestartCore = viewModel::restartCore,
+                        onCloseCore = viewModel::closeCore,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.TAVERN -> Unit
+
+                    StmDestination.VERSIONS -> VersionsScreen(
+                        coreState = stmCoreState,
+                        connectionState = stmCoreConnectionState,
+                        downloadState = downloadState,
+                        onStartDownload = viewModel::startDownload,
+                        onCancelDownload = viewModel::cancelDownload,
+                        onDeleteDownload = viewModel::deleteDownload,
+                        onDeleteAllDownloads = viewModel::deleteAllDownloads,
+                        onClearDownloadFailure = viewModel::clearDownloadFailure,
+                        onImportDownloadedArchive = viewModel::importDownloadedArchive,
+                        onInstallDownloadedArchive = viewModel::installDownloadedArchive,
+                        onActivateSlot = viewModel::activateSlot,
+                        onRollback = viewModel::rollbackActiveSlot,
+                        onRemoveSlot = viewModel::removeSlot,
+                        onVerifySlot = viewModel::verifySlot,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.LOGS -> LogsScreen(
+                        coreState = stmCoreState,
+                        entries = logEntries,
+                        exportState = diagnosticLogExportState,
+                        onExport = viewModel::exportDiagnosticLogs,
+                        onClearExportResult = viewModel::clearDiagnosticLogExportResult,
+                        onCancelCoreJob = viewModel::cancelCoreJob,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.SETTINGS -> SettingsScreen(
+                        settings = settings,
+                        onThemeModeSelected = onThemeModeSelected,
+                        onLanguageSelected = onLanguageSelected,
+                        onOpenFiles = {
+                            viewModel.openAppFiles()
+                            destinationName = StmDestination.FILES.name
+                        },
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.FILES -> AppFilesScreen(
+                        state = appFilesState,
+                        onRootSelected = viewModel::selectAppFileRoot,
+                        onOpenEntry = viewModel::openAppFile,
+                        onNavigateUp = viewModel::navigateUpInAppFiles,
+                        onRefresh = viewModel::refreshAppFiles,
+                        onSaveEditor = viewModel::saveAppFile,
+                        onCloseEditor = viewModel::closeAppFileEditor,
+                        onDelete = viewModel::deleteAppFile,
+                        onClearError = viewModel::clearAppFileError,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+                }
+
+                TavernScreen(
                     coreState = stmCoreState,
                     connectionState = stmCoreConnectionState,
-                    onStart = viewModel::startCore,
-                    onStop = viewModel::stopCore,
-                    onOpenTavern = { destinationName = StmDestination.TAVERN.name },
-                    modifier = Modifier.padding(innerPadding),
-                )
-
-                StmDestination.TAVERN -> TavernScreen(
-                    coreState = stmCoreState,
-                    connectionState = stmCoreConnectionState,
-                    modifier = Modifier.padding(innerPadding),
-                )
-
-                StmDestination.VERSIONS -> VersionsScreen(
-                    coreState = stmCoreState,
-                    connectionState = stmCoreConnectionState,
-                    downloadState = downloadState,
-                    onStartDownload = viewModel::startDownload,
-                    onCancelDownload = viewModel::cancelDownload,
-                    onDeleteDownload = viewModel::deleteDownload,
-                    onDeleteAllDownloads = viewModel::deleteAllDownloads,
-                    onClearDownloadFailure = viewModel::clearDownloadFailure,
-                    onImportDownloadedArchive = viewModel::importDownloadedArchive,
-                    onInstallDownloadedArchive = viewModel::installDownloadedArchive,
-                    onActivateSlot = viewModel::activateSlot,
-                    onRollback = viewModel::rollbackActiveSlot,
-                    onRemoveSlot = viewModel::removeSlot,
-                    modifier = Modifier.padding(innerPadding),
-                )
-
-                StmDestination.LOGS -> LogsScreen(
-                    coreState = stmCoreState,
-                    entries = logEntries,
-                    exportState = diagnosticLogExportState,
-                    onExport = viewModel::exportDiagnosticLogs,
-                    onClearExportResult = viewModel::clearDiagnosticLogExportResult,
-                    onCancelCoreJob = viewModel::cancelCoreJob,
-                    modifier = Modifier.padding(innerPadding),
-                )
-
-                StmDestination.SETTINGS -> SettingsScreen(
-                    settings = settings,
-                    onThemeModeSelected = onThemeModeSelected,
-                    onLanguageSelected = onLanguageSelected,
-                    onOpenFiles = {
-                        viewModel.openAppFiles()
-                        destinationName = StmDestination.FILES.name
+                    modifier = if (destination == StmDestination.TAVERN) {
+                        Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    } else {
+                        Modifier.size(0.dp)
                     },
-                    modifier = Modifier.padding(innerPadding),
-                )
-
-                StmDestination.FILES -> AppFilesScreen(
-                    state = appFilesState,
-                    onRootSelected = viewModel::selectAppFileRoot,
-                    onOpenEntry = viewModel::openAppFile,
-                    onNavigateUp = viewModel::navigateUpInAppFiles,
-                    onRefresh = viewModel::refreshAppFiles,
-                    onSaveEditor = viewModel::saveAppFile,
-                    onCloseEditor = viewModel::closeAppFileEditor,
-                    onDelete = viewModel::deleteAppFile,
-                    onClearError = viewModel::clearAppFileError,
-                    modifier = Modifier.padding(innerPadding),
                 )
             }
         }
     }
+}
+
+@StringRes
+private fun StmCoreWaitKind.waitTitleRes(): Int = when (this) {
+    StmCoreWaitKind.NPM_INSTALL -> R.string.wait_npm_title
+    StmCoreWaitKind.BUNDLE_BUILD -> R.string.wait_bundle_title
+    StmCoreWaitKind.RUNNABLE_ACCEPTANCE -> R.string.wait_acceptance_title
+    StmCoreWaitKind.SILLY_TAVERN_START -> R.string.wait_start_title
+}
+
+@StringRes
+private fun StmCoreWaitKind.waitBodyRes(): Int = when (this) {
+    StmCoreWaitKind.NPM_INSTALL -> R.string.wait_npm_body
+    StmCoreWaitKind.BUNDLE_BUILD -> R.string.wait_bundle_body
+    StmCoreWaitKind.RUNNABLE_ACCEPTANCE -> R.string.wait_acceptance_body
+    StmCoreWaitKind.SILLY_TAVERN_START -> R.string.wait_start_body
 }
 
 @Composable

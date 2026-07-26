@@ -9,8 +9,10 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreJob
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobPhase
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobType
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlot
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreSlotState
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
@@ -245,7 +247,7 @@ class StmInstallerCoordinatorTest {
     }
 
     @Test
-    fun `COMPLETE journal contradiction emits failed evidence and keeps recovery barrier closed`() {
+    fun `recovery uses structural slot evidence and leaves content hashing to diagnostics`() {
         val first = fixture()
         val slot = first.install(
             "slot-contradiction",
@@ -256,18 +258,20 @@ class StmInstallerCoordinatorTest {
         first.root.resolve("core/slots/${slot.id}/content.txt").writeText("tampered")
         first.coordinator.close()
 
-        val recovered = openFixture(first.root, expectedRecoverySuccessful = false)
+        val recovered = openFixture(first.root)
         val replay = recovered.events
             .filterIsInstance<StmInstallerEvent.RecoveredTerminalJob>()
             .single { it.job.operationId == operationId }
 
-        assertEquals(StmCoreJobState.FAILED, replay.job.state)
-        assertEquals("JOURNAL_COMPLETE_INSTALL_MISMATCH", replay.job.error?.code)
-        assertTrue(recovered.events.filterIsInstance<StmInstallerEvent.RecoveryEvidence>().any {
+        assertEquals(StmCoreJobState.SUCCEEDED, replay.job.state)
+        assertFalse(recovered.events.filterIsInstance<StmInstallerEvent.RecoveryEvidence>().any {
             it.error.code == "JOURNAL_COMPLETE_INSTALL_MISMATCH"
         })
-        assertFalse(
+        assertTrue(
             recovered.events.filterIsInstance<StmInstallerEvent.RecoveryComplete>().last().successful,
+        )
+        assertTrue(
+            recovered.coordinator.verifyCommittedSlot(slot.id) is StmSlotVerificationResult.Invalid,
         )
     }
 
@@ -338,7 +342,7 @@ class StmInstallerCoordinatorTest {
     }
 
     @Test
-    fun `recovery rolls back an invalid current target and permits a new activation`() {
+    fun `recovery does not run implicit full content verification`() {
         val first = fixture()
         val slotA = first.install(
             "slot-recovery-a",
@@ -367,19 +371,23 @@ class StmInstallerCoordinatorTest {
         val recoveredActive = recovered.events.filterIsInstance<StmInstallerEvent.ActiveChanged>()
             .mapNotNull(StmInstallerEvent.ActiveChanged::active)
             .last()
-        assertEquals("slot-recovery-a", recoveredActive.slotId)
-        assertEquals(3L, recoveredActive.activeRevision)
-        assertTrue(recovered.events.filterIsInstance<StmInstallerEvent.RecoveryEvidence>().any {
+        assertEquals("slot-recovery-b", recoveredActive.slotId)
+        assertEquals(2L, recoveredActive.activeRevision)
+        assertFalse(recovered.events.filterIsInstance<StmInstallerEvent.RecoveryEvidence>().any {
             it.error.code == "ACTIVE_SLOT_ROLLED_BACK_INVALID_CURRENT"
         })
+        assertTrue(
+            recovered.coordinator.verifyCommittedSlot("slot-recovery-b") is
+                StmSlotVerificationResult.Invalid,
+        )
 
         val activeC = recovered.activate(slotC, recoveredActive)
         assertEquals("slot-recovery-c", activeC.slotId)
-        assertEquals(4L, activeC.activeRevision)
+        assertEquals(3L, activeC.activeRevision)
     }
 
     @Test
-    fun `recovery quarantines an invalid pointer without previous and permits fresh activation`() {
+    fun `recovery keeps structurally valid pointer until user runs full verification`() {
         val first = fixture()
         val slotA = first.install(
             "slot-quarantine-a",
@@ -400,21 +408,23 @@ class StmInstallerCoordinatorTest {
             checkpointTerminalOperationIds = first.terminalOperationIds(),
         )
         val activeEvents = recovered.events.filterIsInstance<StmInstallerEvent.ActiveChanged>()
-        assertTrue(
-            "Expected a cleared active pointer; activeEvents=$activeEvents events=${recovered.events}",
-            activeEvents.last().active == null,
-        )
-        assertFalse(first.root.resolve("core/state/active-slot").exists())
-        assertTrue(
+        val recoveredActive = requireNotNull(activeEvents.last().active)
+        assertEquals("slot-quarantine-a", recoveredActive.slotId)
+        assertTrue(first.root.resolve("core/state/active-slot").exists())
+        assertFalse(
             first.root.resolve("core/state/active-slot-quarantine")
                 .listFiles()
                 .orEmpty()
                 .any { it.name.startsWith("active-slot-") },
         )
+        assertTrue(
+            recovered.coordinator.verifyCommittedSlot("slot-quarantine-a") is
+                StmSlotVerificationResult.Invalid,
+        )
 
-        val activeB = recovered.activate(slotB, checkpoint = null)
+        val activeB = recovered.activate(slotB, checkpoint = recoveredActive)
         assertEquals("slot-quarantine-b", activeB.slotId)
-        assertEquals(1L, activeB.activeRevision)
+        assertEquals(2L, activeB.activeRevision)
     }
 
     @Test
@@ -459,7 +469,9 @@ class StmInstallerCoordinatorTest {
     @Test
     fun `imported exact source follows local preparation phases and commits READY`() {
         val observedPhases = CopyOnWriteArrayList<StmRuntimeSlotPreparationPhase>()
+        var observedInstallMode: StmCoreInstallMode? = null
         val preparer = StmRuntimeSlotPreparer { request, _, onPhase ->
+            observedInstallMode = request.installMode
             StmRuntimeSlotPreparationPhase.entries.forEach {
                 observedPhases += it
                 onPhase(it)
@@ -518,11 +530,13 @@ class StmInstallerCoordinatorTest {
                 slotRevision = 1,
                 source = cached.file.inputStream(),
                 requestedArtifact = cached.artifact,
+                installMode = StmCoreInstallMode.LOCAL_NPM_BUILD,
             ),
         )
         val terminal = fixture.awaitTerminalJob(operationId)
 
         assertEquals(StmCoreJobState.SUCCEEDED, terminal.state)
+        assertEquals(StmCoreInstallMode.LOCAL_NPM_BUILD, observedInstallMode)
         assertEquals(StmRuntimeSlotPreparationPhase.entries, observedPhases)
         val preparationJobs = fixture.events
             .filterIsInstance<StmInstallerEvent.JobChanged>()
@@ -559,6 +573,115 @@ class StmInstallerCoordinatorTest {
             fixture.coordinator.verifyCommittedSlot(ready.id) is StmSlotVerificationResult.Valid,
         )
         fixture.awaitMissing(fixture.root.resolve("core/staging/$operationId"))
+    }
+
+    @Test
+    fun `fast runtime transport failure remains structured and leaves no slot`() {
+        var observedInstallMode: StmCoreInstallMode? = null
+        val preparer = StmRuntimeSlotPreparer { request, _, _ ->
+            observedInstallMode = request.installMode
+            throw StmRuntimeSlotPreparationException(
+                StmRuntimeSlotPreparationErrorCode.PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE,
+                "offline",
+            )
+        }
+        val fixture = fixture(runtimeSlotPreparer = preparer)
+        val commit = "6".repeat(40)
+        val cached = fixture.createSillyTavernSourceArchive("st-offline.zip", commit)
+        val operationId = UUID.randomUUID().toString()
+
+        assertEquals(
+            StmInstallerSubmission.Accepted,
+            fixture.coordinator.installImportedArtifact(
+                operationId = operationId,
+                slotId = "st-release-$commit",
+                slotRevision = 1,
+                source = cached.file.inputStream(),
+                requestedArtifact = cached.artifact,
+                installMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+            ),
+        )
+        val terminal = fixture.awaitTerminalJob(operationId)
+
+        assertEquals(StmCoreInstallMode.FAST_SIGNED_RUNTIME, observedInstallMode)
+        assertEquals(StmCoreJobState.FAILED, terminal.state)
+        assertEquals(
+            "PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE",
+            terminal.error?.code,
+        )
+        assertFalse(fixture.root.resolve("core/slots/st-release-$commit").exists())
+        fixture.awaitMissing(fixture.root.resolve("core/staging/$operationId"))
+    }
+
+    @Test
+    fun `soft wait can be continued repeatedly while runtime work remains active`() {
+        val firstPromptPublished = CountDownLatch(1)
+        val firstContinueObserved = CountDownLatch(1)
+        val secondPromptPublished = CountDownLatch(1)
+        val secondContinueObserved = CountDownLatch(1)
+        val preparer = StmRuntimeSlotPreparer { request, _, _ ->
+            request.observer.onRuntimeTransfer(10, 100, 5)
+            request.observer.beginSoftWait(
+                StmCoreWaitKind.NPM_INSTALL,
+                1,
+                "test wait",
+            )
+            Thread.sleep(5)
+            request.observer.pollSoftWait()
+            firstPromptPublished.countDown()
+            check(firstContinueObserved.await(5, TimeUnit.SECONDS))
+            Thread.sleep(5)
+            request.observer.pollSoftWait()
+            secondPromptPublished.countDown()
+            check(secondContinueObserved.await(5, TimeUnit.SECONDS))
+            request.observer.endSoftWait()
+            request.observer.endRuntimeTransfer()
+            throw StmRuntimeSlotPreparationException(
+                StmRuntimeSlotPreparationErrorCode.PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE,
+                "test complete",
+            )
+        }
+        val fixture = fixture(runtimeSlotPreparer = preparer)
+        val commit = "d".repeat(40)
+        val cached = fixture.createSillyTavernSourceArchive("st-soft-wait.zip", commit)
+        val operationId = UUID.randomUUID().toString()
+
+        assertEquals(
+            StmInstallerSubmission.Accepted,
+            fixture.coordinator.installImportedArtifact(
+                operationId = operationId,
+                slotId = "st-release-$commit",
+                slotRevision = 1,
+                source = cached.file.inputStream(),
+                requestedArtifact = cached.artifact,
+                installMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+            ),
+        )
+        assertTrue(firstPromptPublished.await(5, TimeUnit.SECONDS))
+        assertTrue(
+            fixture.events.filterIsInstance<StmInstallerEvent.WaitPromptChanged>()
+                .any { it.prompt?.operationId == operationId },
+        )
+        assertTrue(fixture.coordinator.continueWaiting(operationId))
+        firstContinueObserved.countDown()
+
+        assertTrue(secondPromptPublished.await(5, TimeUnit.SECONDS))
+        val promptCount = fixture.events.filterIsInstance<StmInstallerEvent.WaitPromptChanged>()
+            .count { it.prompt?.operationId == operationId }
+        assertEquals(2, promptCount)
+        assertTrue(fixture.coordinator.continueWaiting(operationId))
+        secondContinueObserved.countDown()
+
+        val terminal = fixture.awaitTerminalJob(operationId)
+        assertEquals(StmCoreJobState.FAILED, terminal.state)
+        assertTrue(
+            fixture.events.filterIsInstance<StmInstallerEvent.RuntimeTransferChanged>()
+                .any { it.progress?.operationId == operationId },
+        )
+        assertTrue(
+            fixture.events.filterIsInstance<StmInstallerEvent.RuntimeTransferChanged>()
+                .last().progress == null,
+        )
     }
 
     @Test
@@ -746,7 +869,7 @@ class StmInstallerCoordinatorTest {
     }
 
     @Test
-    fun `activation re-verifies immutable slot content before changing active pointer`() {
+    fun `activation uses structural evidence while full verification remains explicit`() {
         val fixture = fixture()
         val slot = fixture.install(
             "slot-tampered",
@@ -760,11 +883,80 @@ class StmInstallerCoordinatorTest {
             StmInstallerSubmission.Accepted,
             fixture.coordinator.activate(operationId, slot, checkpointActive = null),
         )
+        val success = fixture.awaitTerminalJob(operationId)
+
+        assertEquals(StmCoreJobState.SUCCEEDED, success.state)
+        assertTrue(fixture.root.resolve("core/state/active-slot").exists())
+        assertTrue(
+            fixture.coordinator.verifyCommittedSlot(slot.id) is StmSlotVerificationResult.Invalid,
+        )
+    }
+
+    @Test
+    fun `user requested full verification reports tampering and marks slot broken`() {
+        val fixture = fixture()
+        val slot = fixture.install(
+            "slot-diagnostic",
+            1,
+            fixture.createSyntheticArtifact("diagnostic.zip", "8".repeat(40), "original"),
+        )
+        fixture.root.resolve("core/slots/slot-diagnostic/content.txt").writeText("tampered")
+        val operationId = UUID.randomUUID().toString()
+
+        assertEquals(
+            StmInstallerSubmission.Accepted,
+            fixture.coordinator.verifySlot(operationId, slot),
+        )
         val failure = fixture.awaitTerminalJob(operationId)
 
         assertEquals(StmCoreJobState.FAILED, failure.state)
-        assertEquals("SLOT_INVALID", failure.error?.code)
-        assertFalse(fixture.root.resolve("core/state/active-slot").exists())
+        assertEquals("SLOT_CONTENT_INVALID", failure.error?.code)
+        assertTrue(
+            fixture.events.filterIsInstance<StmInstallerEvent.SlotChanged>().any { event ->
+                event.slot.id == slot.id && event.slot.state == StmCoreSlotState.BROKEN
+            },
+        )
+        assertTrue(fixture.root.resolve("core/slots/slot-diagnostic").isDirectory)
+    }
+
+    @Test
+    fun `active slot full verification failure preserves active pointer and user data`() {
+        val fixture = fixture()
+        val slot = fixture.install(
+            "slot-active-diagnostic",
+            1,
+            fixture.createSyntheticArtifact("active-diagnostic.zip", "3".repeat(40), "original"),
+        )
+        val active = fixture.activate(slot, null)
+        val activeBytes = fixture.root.resolve("core/state/active-slot").readBytes()
+        val dataSentinel = fixture.root.resolve("files/stm_data/user.txt").apply {
+            requireNotNull(parentFile).mkdirs()
+            writeText("preserve-user-data")
+        }
+        fixture.root.resolve("core/slots/slot-active-diagnostic/content.txt")
+            .writeText("tampered")
+        val operationId = UUID.randomUUID().toString()
+
+        assertEquals(
+            StmInstallerSubmission.Accepted,
+            fixture.coordinator.verifySlot(
+                operationId,
+                slot,
+                markBrokenOnFailure = false,
+            ),
+        )
+        val failure = fixture.awaitTerminalJob(operationId)
+
+        assertEquals(StmCoreJobState.FAILED, failure.state)
+        assertEquals("SLOT_CONTENT_INVALID", failure.error?.code)
+        assertEquals(activeBytes.toList(), fixture.root.resolve("core/state/active-slot").readBytes().toList())
+        assertEquals("preserve-user-data", dataSentinel.readText())
+        assertTrue(
+            fixture.events.filterIsInstance<StmInstallerEvent.SlotChanged>().none { event ->
+                event.slot.id == slot.id && event.slot.state == StmCoreSlotState.BROKEN
+            },
+        )
+        assertEquals(slot.id, active.slotId)
     }
 
     @Test

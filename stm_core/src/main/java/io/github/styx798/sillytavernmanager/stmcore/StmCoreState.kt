@@ -1,6 +1,6 @@
 package io.github.styx798.sillytavernmanager.stmcore
 
-const val STM_CORE_PROTOCOL_VERSION = 3
+const val STM_CORE_PROTOCOL_VERSION = 4
 
 enum class StmCoreRunState {
     STOPPED,
@@ -13,6 +13,13 @@ enum class StmCoreRunState {
 enum class StmCoreWorkload {
     DIAGNOSTIC,
     SILLY_TAVERN,
+}
+
+enum class StmCoreWaitKind {
+    NPM_INSTALL,
+    BUNDLE_BUILD,
+    RUNNABLE_ACCEPTANCE,
+    SILLY_TAVERN_START,
 }
 
 enum class StmCoreSlotState {
@@ -87,6 +94,29 @@ data class StmCoreError(
     val summary: String,
     val diagnosticDetail: String? = null,
 )
+
+data class StmCoreWaitPrompt(
+    val operationId: String,
+    val kind: StmCoreWaitKind,
+    val intervalMillis: Long,
+    val triggeredAtEpochMs: Long,
+    val summary: String,
+)
+
+data class StmCoreTransferProgress(
+    val operationId: String,
+    val transferredBytes: Long,
+    val totalBytes: Long,
+    val bytesPerSecond: Long,
+    val updatedAtEpochMs: Long,
+) {
+    val fraction: Double
+        get() = if (totalBytes <= 0L) {
+            0.0
+        } else {
+            (transferredBytes.toDouble() / totalBytes.toDouble()).coerceIn(0.0, 1.0)
+        }
+}
 
 /**
  * A bounded public summary. Full signed catalog records and per-file manifests remain on disk.
@@ -166,6 +196,10 @@ data class StmCoreState(
     /** Frozen slot reference for a running SillyTavern session. */
     val runningSlot: StmCoreActiveSlot? = null,
     val jobs: List<StmCoreJob> = emptyList(),
+    /** Ephemeral live-process signal; it is deliberately excluded from the checkpoint codec. */
+    val waitPrompt: StmCoreWaitPrompt? = null,
+    /** Ephemeral signed-runtime telemetry; it is never durable install evidence. */
+    val runtimeTransfer: StmCoreTransferProgress? = null,
 ) {
     val canStart: Boolean
         get() = installerRecoveryComplete &&
@@ -320,6 +354,25 @@ internal fun StmCoreState.requireValidCoreSnapshot(): StmCoreState = apply {
             }
             artifact.requireValidArtifact()
         }
+    }
+    waitPrompt?.let { prompt ->
+        require(prompt.operationId.matches(UUID_TEXT)) { "Wait prompt operation ID is invalid" }
+        require(prompt.intervalMillis > 0L) { "Wait prompt interval must be positive" }
+        require(prompt.triggeredAtEpochMs > 0L) { "Wait prompt time must be positive" }
+        require(prompt.summary.isNotBlank() && prompt.summary.length <= 500) {
+            "Wait prompt summary is invalid"
+        }
+    }
+    runtimeTransfer?.let { transfer ->
+        require(transfer.operationId.matches(UUID_TEXT)) {
+            "Runtime transfer operation ID is invalid"
+        }
+        require(transfer.totalBytes > 0L) { "Runtime transfer total must be positive" }
+        require(transfer.transferredBytes in 0L..transfer.totalBytes) {
+            "Runtime transfer byte count is invalid"
+        }
+        require(transfer.bytesPerSecond >= 0L) { "Runtime transfer speed is invalid" }
+        require(transfer.updatedAtEpochMs > 0L) { "Runtime transfer time is invalid" }
     }
 }
 

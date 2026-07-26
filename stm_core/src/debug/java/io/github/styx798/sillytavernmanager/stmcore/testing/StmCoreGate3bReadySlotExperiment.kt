@@ -157,6 +157,7 @@ internal class StmCoreGate3bReadySlotExperiment(
                     javetCoordinate = javetCoordinate(),
                     abi = DEVICE_ABI,
                 ),
+                sourceEntries = extraction.entries,
                 cancellation = StmExtractionCancellation(cancelled::get),
             )
             supplyManifestSha256 = integration.canonicalManifestSha256
