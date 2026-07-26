@@ -52,10 +52,15 @@ class AndroidStDownloadRepository(context: Context) : StDownloadRepository {
         initializeState()
     }
 
-    override fun start(channel: StDownloadChannel) {
+    override fun start(channel: StDownloadChannel, exactCommit: String?) {
+        val requestedCommit = exactCommit?.let(::requireExactCommitSha)
         synchronized(lock) {
             if (mutableState.value.active != null) return
-            if (discoverArchives().any { archive -> archive.channel == channel }) {
+            if (discoverArchives().any { archive ->
+                    archive.channel == channel &&
+                        (requestedCommit == null || archive.identity.exactCommit == requestedCommit)
+                }
+            ) {
                 setFailure(channel, StDownloadFailureReason.ALREADY_DOWNLOADED)
                 return
             }
@@ -70,7 +75,7 @@ class AndroidStDownloadRepository(context: Context) : StDownloadRepository {
                 failure = null,
             )
             val job = scope.launch(start = CoroutineStart.LAZY) {
-                resolveAndEnqueue(channel, generation)
+                resolveAndEnqueue(channel, generation, requestedCommit)
             }
             resolveJob = job
             job.start()
@@ -157,9 +162,15 @@ class AndroidStDownloadRepository(context: Context) : StDownloadRepository {
         mutableState.value = mutableState.value.copy(failure = null)
     }
 
-    private suspend fun resolveAndEnqueue(channel: StDownloadChannel, generation: Long) {
+    private suspend fun resolveAndEnqueue(
+        channel: StDownloadChannel,
+        generation: Long,
+        exactCommit: String?,
+    ) {
         try {
-            val resolved = resolver.resolve(channel)
+            val resolved = exactCommit?.let { commit ->
+                resolveExactStDownload(channel, commit, System.currentTimeMillis())
+            } ?: resolver.resolve(channel)
             if (!isCurrentResolution(channel, generation)) return
 
             val manager = downloadManager
@@ -183,7 +194,12 @@ class AndroidStDownloadRepository(context: Context) : StDownloadRepository {
 
             synchronized(lock) {
                 if (!isCurrentResolutionLocked(channel, generation)) return
-                if (discoverArchives().any { archive -> archive.channel == channel } || target.exists()) {
+                if (discoverArchives().any { archive ->
+                        archive.channel == channel &&
+                            archive.identity.exactCommit == resolved.exactCommit
+                    } ||
+                    target.exists()
+                ) {
                     finishResolutionFailureLocked(
                         channel,
                         generation,

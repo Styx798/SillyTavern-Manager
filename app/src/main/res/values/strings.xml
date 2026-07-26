@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">Development build v0.0.3</string>
+    <string name="app_subtitle">Development build v0.0.4</string>
 
     <string name="nav_dashboard">Home</string>
     <string name="nav_tavern">Tavern</string>
     <string name="nav_versions">ST Manager</string>
-    <string name="nav_logs">Logs</string>
+    <string name="nav_st_logs">ST backend</string>
+    <string name="nav_logs">STM diagnostics</string>
     <string name="nav_settings">Settings</string>
     <string name="open_navigation_menu">Open navigation menu</string>
 
     <string name="dashboard_title">Overview</string>
-    <string name="dashboard_intro">View STM Core status and manage SillyTavern download artifacts from one place.</string>
+    <string name="dashboard_intro">Check STM Core and control the current SillyTavern instance.</string>
     <string name="runtime_status_title">STM Core status</string>
     <string name="runtime_stopped">Feather Engine is idle</string>
     <string name="runtime_starting">Feather Engine is starting</string>
@@ -69,6 +70,8 @@
     <string name="st_runtime_no_active">No active ST version</string>
     <string name="st_runtime_running_version">Running ST %1$s</string>
     <string name="st_runtime_stopped_version">ST %1$s is stopped</string>
+    <string name="st_runtime_running_instance">%1$s is running · ST %2$s</string>
+    <string name="st_runtime_stopped_instance">%1$s is stopped · ST %2$s</string>
     <string name="st_runtime_status_starting">Starting and waiting for the local health check.</string>
     <string name="st_runtime_status_running">The local server remains active until you stop it.</string>
     <string name="st_runtime_status_stopping">Stopping the local server gracefully.</string>
@@ -288,6 +291,12 @@
 
     <string name="logs_title">Logs and technical records</string>
     <string name="logs_intro">Inspect Core state, maintenance jobs, internal slot evidence, and STM app events. These records are never presented as installed ST versions.</string>
+    <string name="st_logs_title">SillyTavern backend</string>
+    <string name="st_logs_intro">Live output from the real SillyTavern Node session. This page reads the log only while it is open.</string>
+    <string name="st_logs_truncated">Showing the newest 500 lines. Older output remains outside this view.</string>
+    <string name="st_logs_empty">No output yet</string>
+    <string name="st_logs_unavailable">SillyTavern has not produced a backend log</string>
+    <string name="st_logs_empty_body">Start SillyTavern to see its native backend output here.</string>
     <string name="logs_export_title">Export diagnostic report</string>
     <string name="logs_export_body">Save a bounded text report containing device, WebView, Core, slot, job, STM event, and recent SillyTavern Node log details. It may contain local paths and technical information; review it before sharing.</string>
     <string name="logs_export_action">Export report</string>
@@ -317,6 +326,12 @@
     <string name="settings_language_system">Use system language</string>
     <string name="settings_language_chinese">简体中文</string>
     <string name="settings_language_english">English</string>
+    <string name="settings_diagnostics_title">Diagnostics</string>
+    <string name="settings_diagnostics_entry_title">STM logs and technical records</string>
+    <string name="settings_diagnostics_entry_summary">Open Core state, maintenance jobs, diagnostics export, and STM app events.</string>
+    <string name="settings_advanced_title">Advanced</string>
+    <string name="settings_advanced_st_entry_title">Advanced ST maintenance</string>
+    <string name="settings_advanced_st_entry_summary">Open technical download, preview build, verification, rollback, and program-slot controls.</string>
     <string name="settings_files_title">App data</string>
     <string name="settings_files_entry_title">Manage STM files</string>
     <string name="settings_files_entry_summary">Browse, edit text files, and delete files stored in STM’s private data areas.</string>
@@ -357,4 +372,42 @@
     <string name="files_error_too_large">Only text files up to 1 MB can be edited in the app.</string>
     <string name="files_error_unsupported">This file type is not supported by the text editor.</string>
     <string name="files_back_to_settings">Back to settings</string>
+    <string name="st_simple_title">SillyTavern</string>
+    <string name="st_simple_intro">Install an official version and manage your named ST instances.</string>
+    <string name="st_simple_available_title">Install ST version</string>
+    <string name="st_simple_official_version">Official stable · %1$s</string>
+    <string name="st_simple_signed_note">Uses STM’s signed fast installation path.</string>
+    <string name="st_simple_install_action">Install this version</string>
+    <string name="st_simple_install_dialog_title">Name this ST instance</string>
+    <string name="st_simple_install_confirm">Start installation</string>
+    <string name="st_simple_built_title">Built ST versions</string>
+    <string name="st_simple_built_empty">No ST version has been built yet.</string>
+    <string name="st_instances_title">Installed ST instances</string>
+    <string name="st_instances_empty">No ST instance is installed.</string>
+    <string name="st_instance_version">Official ST %1$s</string>
+    <string name="st_instance_current">Current</string>
+    <string name="st_instance_select">Use this instance</string>
+    <string name="st_instance_rename">Rename</string>
+    <string name="st_instance_rename_title">Rename ST instance</string>
+    <string name="st_instance_rename_confirm">Save name</string>
+    <string name="st_instance_name_label">Instance name</string>
+    <string name="st_instance_name_explanation">The name distinguishes this instance from your other ST installations. It does not change the official ST version.</string>
+    <string name="st_instance_error_title">Instance change failed</string>
+    <string name="st_install_progress_title">Installing SillyTavern</string>
+    <string name="st_install_complete_title">ST instance is ready</string>
+    <string name="st_install_failed_title">Installation stopped</string>
+    <string name="st_install_cancelled_title">Installation cancelled</string>
+    <string name="st_install_step_source">Get the official ST package</string>
+    <string name="st_install_step_verify">Verify and unpack the package</string>
+    <string name="st_install_step_runtime">Prepare the signed runtime</string>
+    <string name="st_install_step_acceptance">Start ST for a local readiness check</string>
+    <string name="st_install_step_instance">Create the named instance</string>
+    <string name="st_install_error_invalid_name">Choose a valid instance name. %1$s</string>
+    <string name="st_install_error_duplicate_name">That instance name is already in use. %1$s</string>
+    <string name="st_install_error_download">The official package could not be downloaded. %1$s</string>
+    <string name="st_install_error_core">STM Core could not start the installation. %1$s</string>
+    <string name="st_install_error_install">The signed installation did not complete. %1$s</string>
+    <string name="st_install_error_registry">ST was prepared, but the instance record could not be saved. %1$s</string>
+    <string name="st_install_error_activation">The first instance was prepared, but it could not be selected. %1$s</string>
+    <string name="st_install_error_unknown">Installation did not complete. %1$s</string>
 </resources>

@@ -40,6 +40,8 @@ internal fun SettingsScreen(
     onThemeModeSelected: (ThemeMode) -> Unit,
     onLanguageSelected: (AppLanguage) -> Unit,
     onOpenFiles: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
+    onOpenAdvancedSt: () -> Unit,
     onOpenCompleteRemoval: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -126,6 +128,26 @@ internal fun SettingsScreen(
                 titleRes = R.string.settings_language_english,
                 selected = settings.language == AppLanguage.ENGLISH,
                 onClick = { onLanguageSelected(AppLanguage.ENGLISH) },
+            )
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        SettingsSection(title = stringResource(R.string.settings_diagnostics_title)) {
+            SettingsAction(
+                title = stringResource(R.string.settings_diagnostics_entry_title),
+                summary = stringResource(R.string.settings_diagnostics_entry_summary),
+                onClick = onOpenDiagnostics,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        SettingsSection(title = stringResource(R.string.settings_advanced_title)) {
+            SettingsAction(
+                title = stringResource(R.string.settings_advanced_st_entry_title),
+                summary = stringResource(R.string.settings_advanced_st_entry_summary),
+                onClick = onOpenAdvancedSt,
             )
         }
 

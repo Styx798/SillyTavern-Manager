@@ -29,6 +29,7 @@ internal object StmCoreProtocol {
     private const val KEY_ARTIFACT = "artifact"
     private const val KEY_SOURCE_DESCRIPTOR = "source_descriptor"
     private const val KEY_INSTALL_MODE = "install_mode"
+    private const val KEY_INSTANCE_ID = "instance_id"
 
     fun commandMessage(what: Int, operationId: String): Message =
         Message.obtain(null, what).apply {
@@ -37,6 +38,17 @@ internal object StmCoreProtocol {
 
     fun operationIdFrom(message: Message): String? =
         message.data.getString(KEY_OPERATION_ID)?.takeIf(::isUuid)
+
+    fun startMessage(operationId: String, instanceId: String?): Message =
+        commandMessage(MESSAGE_START, operationId).apply {
+            instanceId?.let { data.putString(KEY_INSTANCE_ID, it) }
+        }
+
+    fun instanceIdFrom(message: Message): String? =
+        message.data.getString(KEY_INSTANCE_ID)?.takeIf(::isValidStmCoreInstanceId)
+
+    fun hasInvalidInstanceId(message: Message): Boolean =
+        message.data.containsKey(KEY_INSTANCE_ID) && instanceIdFrom(message) == null
 
     fun targetCommandMessage(what: Int, operationId: String, targetId: String): Message =
         commandMessage(what, operationId).apply {
@@ -168,6 +180,10 @@ internal object StmCoreProtocol {
         return runCatching { StmCoreInstallMode.valueOf(encoded) }.getOrNull()
     }
 }
+
+internal fun isValidStmCoreInstanceId(value: String): Boolean = runCatching {
+    java.util.UUID.fromString(value).toString().equals(value, ignoreCase = true)
+}.getOrDefault(false)
 
 enum class StmCoreInstallMode {
     FAST_SIGNED_RUNTIME,

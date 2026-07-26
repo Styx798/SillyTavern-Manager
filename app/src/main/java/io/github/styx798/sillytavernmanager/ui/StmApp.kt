@@ -42,6 +42,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,9 +66,12 @@ import io.github.styx798.sillytavernmanager.ui.screens.AppFilesScreen
 import io.github.styx798.sillytavernmanager.ui.screens.DashboardScreen
 import io.github.styx798.sillytavernmanager.ui.screens.LogsScreen
 import io.github.styx798.sillytavernmanager.ui.screens.SettingsScreen
+import io.github.styx798.sillytavernmanager.ui.screens.SillyTavernLogsScreen
 import io.github.styx798.sillytavernmanager.ui.screens.TavernScreen
+import io.github.styx798.sillytavernmanager.ui.screens.StManagementScreen
 import io.github.styx798.sillytavernmanager.ui.screens.VersionsScreen
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreRunState
 import kotlinx.coroutines.launch
 
 private enum class StmDestination(
@@ -77,8 +82,10 @@ private enum class StmDestination(
     DASHBOARD(R.string.nav_dashboard, Icons.Default.Home),
     TAVERN(R.string.nav_tavern, Icons.Default.PlayArrow),
     VERSIONS(R.string.nav_versions, Icons.Default.Refresh),
-    LOGS(R.string.nav_logs, Icons.AutoMirrored.Filled.List),
+    ST_LOGS(R.string.nav_st_logs, Icons.AutoMirrored.Filled.List),
     SETTINGS(R.string.nav_settings, Icons.Default.Settings),
+    DIAGNOSTICS(R.string.nav_logs, Icons.AutoMirrored.Filled.List, false),
+    ADVANCED_ST(R.string.settings_advanced_st_entry_title, Icons.Default.Settings, false),
     FILES(R.string.files_title, Icons.AutoMirrored.Filled.List, false),
 }
 
@@ -102,6 +109,9 @@ fun StmApp(
     val appFilesState by viewModel.appFilesState.collectAsStateWithLifecycle()
     val diagnosticLogExportState by viewModel.diagnosticLogExportState
         .collectAsStateWithLifecycle()
+    val sillyTavernLogSnapshot by viewModel.sillyTavernLogSnapshot.collectAsStateWithLifecycle()
+    val instanceState by viewModel.instanceState.collectAsStateWithLifecycle()
+    val instanceInstallState by viewModel.instanceInstallState.collectAsStateWithLifecycle()
     var destinationName by rememberSaveable(
         startInTavern,
         startInVersions,
@@ -122,6 +132,14 @@ fun StmApp(
     val drawerState = androidx.compose.material3.rememberDrawerState(DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    var openTavernWhenReady by rememberSaveable { mutableStateOf(false) }
+    DisposableEffect(destination) {
+        val logsVisible = destination == StmDestination.ST_LOGS
+        viewModel.setSillyTavernLogsVisible(logsVisible)
+        onDispose {
+            if (logsVisible) viewModel.setSillyTavernLogsVisible(false)
+        }
+    }
     var showNotificationPermissionExplanation by rememberSaveable { mutableStateOf(false) }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -129,6 +147,7 @@ fun StmApp(
         viewModel.startCore()
     }
     val startSillyTavern = {
+        openTavernWhenReady = true
         val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 context,
@@ -138,6 +157,18 @@ fun StmApp(
             showNotificationPermissionExplanation = true
         } else {
             viewModel.startCore()
+        }
+    }
+    LaunchedEffect(
+        openTavernWhenReady,
+        stmCoreState.canOpenTavern,
+        stmCoreState.runState,
+    ) {
+        if (openTavernWhenReady && stmCoreState.canOpenTavern) {
+            openTavernWhenReady = false
+            destinationName = StmDestination.TAVERN.name
+        } else if (openTavernWhenReady && stmCoreState.runState == StmCoreRunState.CRASHED) {
+            openTavernWhenReady = false
         }
     }
 
@@ -199,6 +230,14 @@ fun StmApp(
         }
     }
 
+    BackHandler(enabled = destination == StmDestination.DIAGNOSTICS) {
+        destinationName = StmDestination.SETTINGS.name
+    }
+
+    BackHandler(enabled = destination == StmDestination.ADVANCED_ST) {
+        destinationName = StmDestination.SETTINGS.name
+    }
+
     BackHandler(enabled = destination == StmDestination.TAVERN) {
         destinationName = StmDestination.DASHBOARD.name
     }
@@ -238,7 +277,12 @@ fun StmApp(
                 if (destination != StmDestination.TAVERN) {
                     TopAppBar(
                         navigationIcon = {
-                            if (destination == StmDestination.FILES) {
+                            if (destination in setOf(
+                                    StmDestination.FILES,
+                                    StmDestination.DIAGNOSTICS,
+                                    StmDestination.ADVANCED_ST,
+                                )
+                            ) {
                                 IconButton(
                                     onClick = { destinationName = StmDestination.SETTINGS.name },
                                 ) {
@@ -284,18 +328,57 @@ fun StmApp(
                     StmDestination.DASHBOARD -> DashboardScreen(
                         coreState = stmCoreState,
                         connectionState = stmCoreConnectionState,
+                        activeInstance = instanceState.activeInstance,
                         onStartSillyTavern = startSillyTavern,
-                        onStopSillyTavern = viewModel::stopCore,
+                        onStopSillyTavern = {
+                            openTavernWhenReady = false
+                            viewModel.stopCore()
+                        },
                         onOpenTavern = { destinationName = StmDestination.TAVERN.name },
                         onOpenCore = viewModel::openCore,
-                        onRestartCore = viewModel::restartCore,
-                        onCloseCore = viewModel::closeCore,
+                        onRestartCore = {
+                            openTavernWhenReady = false
+                            viewModel.restartCore()
+                        },
+                        onCloseCore = {
+                            openTavernWhenReady = false
+                            viewModel.closeCore()
+                        },
                         modifier = Modifier.padding(innerPadding),
                     )
 
                     StmDestination.TAVERN -> Unit
 
-                    StmDestination.VERSIONS -> VersionsScreen(
+                    StmDestination.VERSIONS -> StManagementScreen(
+                        coreState = stmCoreState,
+                        connectionState = stmCoreConnectionState,
+                        instanceState = instanceState,
+                        installState = instanceInstallState,
+                        onInstallStable = { name -> viewModel.installNewInstance(name) },
+                        onCancelInstall = viewModel::cancelInstanceInstall,
+                        onDismissInstall = viewModel::dismissInstanceInstall,
+                        onRenameInstance = viewModel::renameInstance,
+                        onSelectInstance = viewModel::selectInstance,
+                        onClearInstanceError = viewModel::clearInstanceError,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.ST_LOGS -> SillyTavernLogsScreen(
+                        snapshot = sillyTavernLogSnapshot,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.DIAGNOSTICS -> LogsScreen(
+                        coreState = stmCoreState,
+                        entries = logEntries,
+                        exportState = diagnosticLogExportState,
+                        onExport = viewModel::exportDiagnosticLogs,
+                        onClearExportResult = viewModel::clearDiagnosticLogExportResult,
+                        onCancelCoreJob = viewModel::cancelCoreJob,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.ADVANCED_ST -> VersionsScreen(
                         coreState = stmCoreState,
                         connectionState = stmCoreConnectionState,
                         downloadState = downloadState,
@@ -313,16 +396,6 @@ fun StmApp(
                         modifier = Modifier.padding(innerPadding),
                     )
 
-                    StmDestination.LOGS -> LogsScreen(
-                        coreState = stmCoreState,
-                        entries = logEntries,
-                        exportState = diagnosticLogExportState,
-                        onExport = viewModel::exportDiagnosticLogs,
-                        onClearExportResult = viewModel::clearDiagnosticLogExportResult,
-                        onCancelCoreJob = viewModel::cancelCoreJob,
-                        modifier = Modifier.padding(innerPadding),
-                    )
-
                     StmDestination.SETTINGS -> SettingsScreen(
                         settings = settings,
                         onThemeModeSelected = onThemeModeSelected,
@@ -330,6 +403,12 @@ fun StmApp(
                         onOpenFiles = {
                             viewModel.openAppFiles()
                             destinationName = StmDestination.FILES.name
+                        },
+                        onOpenDiagnostics = {
+                            destinationName = StmDestination.DIAGNOSTICS.name
+                        },
+                        onOpenAdvancedSt = {
+                            destinationName = StmDestination.ADVANCED_ST.name
                         },
                         onOpenCompleteRemoval = onOpenCompleteRemoval,
                         modifier = Modifier.padding(innerPadding),

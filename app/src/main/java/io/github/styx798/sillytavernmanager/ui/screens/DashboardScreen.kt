@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.styx798.sillytavernmanager.R
 import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreConnectionState
+import io.github.styx798.sillytavernmanager.core.instances.StInstance
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifactKind
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreError
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreRunState
@@ -39,6 +40,7 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreWorkload
 fun DashboardScreen(
     coreState: StmCoreState,
     connectionState: StmCoreConnectionState,
+    activeInstance: StInstance?,
     onStartSillyTavern: () -> Unit,
     onStopSillyTavern: () -> Unit,
     onOpenTavern: () -> Unit,
@@ -80,15 +82,13 @@ fun DashboardScreen(
             SillyTavernControlCard(
                 coreState = coreState,
                 connectionState = connectionState,
+                activeInstance = activeInstance,
                 onStart = onStartSillyTavern,
                 onStop = onStopSillyTavern,
                 onOpen = onOpenTavern,
             )
         }
 
-        item {
-            BuildStatusCard()
-        }
     }
 }
 
@@ -131,19 +131,6 @@ private fun CoreStatusCard(
                     ),
                 )
             }
-            Text(
-                text = stringResource(
-                    if (connectionState == StmCoreConnectionState.CONNECTED) {
-                        R.string.core_health_healthy
-                    } else if (connectionState == StmCoreConnectionState.CLOSED) {
-                        R.string.core_health_closed
-                    } else {
-                        R.string.core_health_unavailable
-                    },
-                ),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-            )
             if (connectionState != StmCoreConnectionState.CONNECTED) {
                 Text(
                     text = stringResource(
@@ -162,31 +149,13 @@ private fun CoreStatusCard(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            coreState.localizedStatusDetail()?.let { detail ->
+            coreState.error?.localizedSummary()?.let { detail ->
                 Text(
                     text = detail,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (coreState.runState == StmCoreRunState.CRASHED) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    color = MaterialTheme.colorScheme.error,
                 )
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f))
-            InfoRow(
-                label = stringResource(R.string.installed_version),
-                value = coreState.componentIdentity,
-            )
-            InfoRow(
-                label = stringResource(R.string.core_revision),
-                value = coreState.revision.takeIf { it > 0 }?.toString()
-                    ?: stringResource(R.string.not_available),
-            )
-            InfoRow(
-                label = stringResource(R.string.feather_engine_health),
-                value = stringResource(coreState.runState.titleRes()),
-            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -223,6 +192,7 @@ private fun CoreStatusCard(
 private fun SillyTavernControlCard(
     coreState: StmCoreState,
     connectionState: StmCoreConnectionState,
+    activeInstance: StInstance?,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpen: () -> Unit,
@@ -247,6 +217,16 @@ private fun SillyTavernControlCard(
             Text(
                 text = when {
                     version == null -> stringResource(R.string.st_runtime_no_active)
+                    activeInstance != null && running -> stringResource(
+                        R.string.st_runtime_running_instance,
+                        activeInstance.displayName,
+                        version,
+                    )
+                    activeInstance != null -> stringResource(
+                        R.string.st_runtime_stopped_instance,
+                        activeInstance.displayName,
+                        version,
+                    )
                     running -> stringResource(R.string.st_runtime_running_version, version)
                     else -> stringResource(R.string.st_runtime_stopped_version, version)
                 },
@@ -272,37 +252,40 @@ private fun SillyTavernControlCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Button(
-                    onClick = if (coreState.canStop && running) onStop else onStart,
-                    enabled = connectionState == StmCoreConnectionState.CONNECTED &&
-                        version != null &&
-                        ((coreState.canStop && running) || coreState.canStart),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(
-                        stringResource(
-                            if (coreState.canStop && running) {
-                                R.string.action_stop_st
-                            } else {
-                                R.string.action_start_st
-                            },
-                        ),
-                    )
-                }
-                OutlinedButton(
-                    onClick = onOpen,
-                    enabled = connectionState == StmCoreConnectionState.CONNECTED &&
-                        coreState.canOpenTavern,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(stringResource(R.string.action_open_st))
+                if (coreState.canOpenTavern) {
+                    Button(
+                        onClick = onOpen,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.action_open_st))
+                    }
+                    OutlinedButton(
+                        onClick = onStop,
+                        enabled = coreState.canStop,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.action_stop_st))
+                    }
+                } else {
+                    Button(
+                        onClick = if (coreState.canStop && running) onStop else onStart,
+                        enabled = connectionState == StmCoreConnectionState.CONNECTED &&
+                            version != null &&
+                            ((coreState.canStop && running) || coreState.canStart),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            stringResource(
+                                if (coreState.canStop && running) {
+                                    R.string.action_stop_st
+                                } else {
+                                    R.string.action_start_st
+                                },
+                            ),
+                        )
+                    }
                 }
             }
-            Text(
-                text = stringResource(R.string.action_unavailable_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }

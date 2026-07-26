@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 interface StDownloadRepository {
     val state: StateFlow<StDownloadState>
 
-    fun start(channel: StDownloadChannel)
+    fun start(channel: StDownloadChannel, exactCommit: String? = null)
 
     fun cancel()
 

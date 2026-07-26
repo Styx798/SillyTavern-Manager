@@ -309,7 +309,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         }
     }
 
-    private fun startCore(operationId: String) {
+    private fun startCore(operationId: String, instanceId: String? = null) {
         if (processTerminationScheduled) return
         if (!installerRecoveryComplete) {
             releaseSessionForeground()
@@ -386,7 +386,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     val prepared = StmSillyTavernLaunchFactory.prepare(
                         slotRoot = slotRoot,
                         archiveRoot = archiveRoot,
-                        dataRoot = StmCorePaths.dataRoot(this),
+                        dataRoot = StmCorePaths.prepareInstanceDataRoot(this, instanceId),
                         sessionDirectory = sessionDirectory,
                         logsRoot = StmCorePaths.logsRoot(this),
                         expectedVersion = version,
@@ -717,7 +717,14 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             }
 
             StmCoreProtocol.MESSAGE_START -> {
-                StmCoreProtocol.operationIdFrom(message)?.let(::startCore)
+                if (StmCoreProtocol.hasInvalidInstanceId(message)) {
+                    releaseSessionForeground()
+                    publish { copy(summary = "Start rejected because the ST instance ID is invalid") }
+                    return true
+                }
+                StmCoreProtocol.operationIdFrom(message)?.let { operationId ->
+                    startCore(operationId, StmCoreProtocol.instanceIdFrom(message))
+                }
                 true
             }
 
