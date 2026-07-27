@@ -70,6 +70,7 @@ import io.github.styx798.sillytavernmanager.ui.screens.SillyTavernLogsScreen
 import io.github.styx798.sillytavernmanager.ui.screens.TavernScreen
 import io.github.styx798.sillytavernmanager.ui.screens.StManagementScreen
 import io.github.styx798.sillytavernmanager.ui.screens.VersionsScreen
+import io.github.styx798.sillytavernmanager.ui.screens.UserDataBackupScreen
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreRunState
 import kotlinx.coroutines.launch
@@ -83,6 +84,7 @@ private enum class StmDestination(
     TAVERN(R.string.nav_tavern, Icons.Default.PlayArrow),
     VERSIONS(R.string.nav_versions, Icons.Default.Refresh),
     ST_LOGS(R.string.nav_st_logs, Icons.AutoMirrored.Filled.List),
+    USER_DATA(R.string.nav_user_data, Icons.AutoMirrored.Filled.List),
     SETTINGS(R.string.nav_settings, Icons.Default.Settings),
     DIAGNOSTICS(R.string.nav_logs, Icons.AutoMirrored.Filled.List, false),
     ADVANCED_ST(R.string.settings_advanced_st_entry_title, Icons.Default.Settings, false),
@@ -112,6 +114,7 @@ fun StmApp(
     val sillyTavernLogSnapshot by viewModel.sillyTavernLogSnapshot.collectAsStateWithLifecycle()
     val instanceState by viewModel.instanceState.collectAsStateWithLifecycle()
     val instanceInstallState by viewModel.instanceInstallState.collectAsStateWithLifecycle()
+    val userDataBackupState by viewModel.userDataBackupState.collectAsStateWithLifecycle()
     var destinationName by rememberSaveable(
         startInTavern,
         startInVersions,
@@ -365,6 +368,22 @@ fun StmApp(
 
                     StmDestination.ST_LOGS -> SillyTavernLogsScreen(
                         snapshot = sillyTavernLogSnapshot,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    StmDestination.USER_DATA -> UserDataBackupScreen(
+                        coreState = stmCoreState,
+                        connectionState = stmCoreConnectionState,
+                        instanceState = instanceState,
+                        backupState = userDataBackupState,
+                        onCreateBackup = viewModel::createUserDataBackup,
+                        onReplaceUserData = viewModel::replaceUserData,
+                        onRestoreBackup = viewModel::restoreUserDataBackup,
+                        onDeleteBackup = viewModel::deleteUserDataBackup,
+                        onExportBackup = viewModel::exportUserDataBackup,
+                        onRefresh = viewModel::refreshUserDataBackups,
+                        onRetryMigration = viewModel::retryLegacyDataMigration,
+                        onClearResult = viewModel::clearUserDataBackupResult,
                         modifier = Modifier.padding(innerPadding),
                     )
 

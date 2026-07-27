@@ -46,6 +46,22 @@ object StmCorePaths {
     fun instancesRoot(context: Context): File =
         lexicalChild(context.filesDir, INSTANCES_DIRECTORY)
 
+    fun backupsRoot(context: Context): File =
+        lexicalChild(context.filesDir, BACKUPS_DIRECTORY)
+
+    fun instanceDataRoot(context: Context, instanceId: String): File {
+        require(instanceId.matches(UUID_ID)) { "ST instance ID is invalid" }
+        return lexicalChild(
+            lexicalChild(instancesRoot(context), instanceId),
+            INSTANCE_DATA_DIRECTORY,
+        )
+    }
+
+    fun instanceBackupsRoot(context: Context, instanceId: String): File {
+        require(instanceId.matches(UUID_ID)) { "ST instance ID is invalid" }
+        return lexicalChild(backupsRoot(context), instanceId)
+    }
+
     fun prepareInstanceDataRoot(context: Context, instanceId: String?): File {
         return prepareInstanceDataRootAt(context.filesDir, instanceId)
     }
@@ -100,6 +116,7 @@ object StmCorePaths {
         coreRoot(context),
         dataRoot(context),
         instancesRoot(context),
+        backupsRoot(context),
         cacheRoot(context),
     )
 
@@ -168,6 +185,7 @@ object StmCorePaths {
     private const val LOGS_DIRECTORY = "logs"
     private const val DATA_DIRECTORY = "stm_data"
     private const val INSTANCES_DIRECTORY = "stm_instances"
+    private const val BACKUPS_DIRECTORY = "stm_backups"
     private const val INSTANCE_DATA_DIRECTORY = "data"
     private const val SESSIONS_DIRECTORY = "sessions"
     private val UUID_ID = Regex(

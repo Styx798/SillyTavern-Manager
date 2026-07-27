@@ -136,6 +136,22 @@ class SharedPreferencesStInstanceRepository(context: Context) : StInstanceReposi
         )
     }.onFailure(::publishFailure)
 
+    @Synchronized
+    override fun updateDataMode(
+        instanceId: String,
+        dataMode: StInstanceDataMode,
+    ): Result<Unit> = runCatching {
+        val current = mutableState.value
+        require(current.instances.any { it.id == instanceId }) { "Instance does not exist" }
+        persist(
+            current.instances.map {
+                if (it.id == instanceId) it.copy(dataMode = dataMode) else it
+            },
+            current.activeInstanceId,
+            current.pendingInstall,
+        )
+    }.onFailure(::publishFailure)
+
     override fun clearError() {
         mutableState.value = mutableState.value.copy(error = null)
     }
@@ -189,11 +205,6 @@ class SharedPreferencesStInstanceRepository(context: Context) : StInstanceReposi
 
     private fun requireValidInstance(instance: StInstance) {
         requireValidInstanceIdentity(instance.id, instance.slotId)
-        if (instance.dataMode == StInstanceDataMode.ISOLATED) {
-            require(instance.slotId == "st-${instance.id}") {
-                "Isolated instance slot does not match its identity"
-            }
-        }
         require(instance.slotRevision > 0) { "Instance slot revision is invalid" }
         require(instance.stVersion.isNotBlank()) { "Instance ST version is missing" }
         require(instance.createdAtEpochMs > 0) { "Instance creation time is invalid" }

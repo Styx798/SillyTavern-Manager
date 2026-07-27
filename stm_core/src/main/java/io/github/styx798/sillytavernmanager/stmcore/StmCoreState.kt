@@ -106,6 +106,12 @@ enum class StmCoreJobType {
     ROLLBACK,
     REMOVE,
     MIGRATE,
+    USER_DATA_BACKUP,
+    USER_DATA_IMPORT,
+    USER_DATA_RESTORE,
+    USER_DATA_DELETE_BACKUP,
+    USER_DATA_MIGRATE,
+    USER_DATA_FINALIZE_MIGRATION,
 }
 
 enum class StmCoreJobPhase {

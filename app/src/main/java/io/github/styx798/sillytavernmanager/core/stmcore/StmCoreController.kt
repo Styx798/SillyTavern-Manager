@@ -1,5 +1,6 @@
 package io.github.styx798.sillytavernmanager.core.stmcore
 
+import android.net.Uri
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreState
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreArtifact
 import io.github.styx798.sillytavernmanager.stmcore.StmCoreInstallMode
@@ -68,6 +69,32 @@ interface StmCoreController {
 
     /** Explicit slow diagnostic: re-hashes every file in the selected immutable slot. */
     suspend fun verifySlot(slotId: String): StmCoreCommandResult
+
+    suspend fun createUserDataBackup(
+        instanceId: String,
+        displayName: String,
+    ): StmCoreCommandResult
+
+    suspend fun replaceUserData(
+        instanceId: String,
+        displayName: String,
+        source: Uri,
+        backupFirst: Boolean,
+    ): StmCoreCommandResult
+
+    suspend fun restoreUserDataBackup(
+        instanceId: String,
+        backupFileName: String,
+    ): StmCoreCommandResult
+
+    suspend fun deleteUserDataBackup(
+        instanceId: String,
+        backupFileName: String,
+    ): StmCoreCommandResult
+
+    suspend fun migrateLegacyUserData(instanceId: String): StmCoreCommandResult
+
+    suspend fun finalizeLegacyUserDataMigration(instanceId: String): StmCoreCommandResult
 }
 
 sealed interface StmCoreCommandResult {

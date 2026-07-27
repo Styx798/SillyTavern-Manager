@@ -202,6 +202,86 @@ class StmCoreClient(
         )
     }
 
+    fun requestCreateUserDataBackup(
+        operationId: String,
+        instanceId: String,
+        displayName: String,
+    ): Boolean = requestBoundCommand(
+        StmCoreProtocol.userDataCommandMessage(
+            StmCoreProtocol.MESSAGE_CREATE_USER_DATA_BACKUP,
+            operationId,
+            instanceId,
+            displayName = displayName,
+        ),
+    )
+
+    /** File descriptors are sent immediately and are never retained in the reconnect queue. */
+    fun requestReplaceUserData(
+        operationId: String,
+        instanceId: String,
+        displayName: String,
+        sourceDescriptor: ParcelFileDescriptor,
+        backupFirst: Boolean,
+    ): Boolean {
+        checkMainThread()
+        if (outgoingMessenger == null) return false
+        return send(
+            StmCoreProtocol.replaceUserDataMessage(
+                operationId,
+                instanceId,
+                displayName,
+                sourceDescriptor,
+                backupFirst,
+            ),
+        )
+    }
+
+    fun requestRestoreUserDataBackup(
+        operationId: String,
+        instanceId: String,
+        backupFileName: String,
+    ): Boolean = requestBoundCommand(
+        StmCoreProtocol.userDataCommandMessage(
+            StmCoreProtocol.MESSAGE_RESTORE_USER_DATA_BACKUP,
+            operationId,
+            instanceId,
+            backupFileName = backupFileName,
+        ),
+    )
+
+    fun requestDeleteUserDataBackup(
+        operationId: String,
+        instanceId: String,
+        backupFileName: String,
+    ): Boolean = requestBoundCommand(
+        StmCoreProtocol.userDataCommandMessage(
+            StmCoreProtocol.MESSAGE_DELETE_USER_DATA_BACKUP,
+            operationId,
+            instanceId,
+            backupFileName = backupFileName,
+        ),
+    )
+
+    fun requestMigrateLegacyUserData(operationId: String, instanceId: String): Boolean =
+        requestBoundCommand(
+            StmCoreProtocol.userDataCommandMessage(
+                StmCoreProtocol.MESSAGE_MIGRATE_LEGACY_USER_DATA,
+                operationId,
+                instanceId,
+            ),
+        )
+
+    fun requestFinalizeLegacyUserDataMigration(
+        operationId: String,
+        instanceId: String,
+    ): Boolean = requestBoundCommand(
+        StmCoreProtocol.userDataCommandMessage(
+            StmCoreProtocol.MESSAGE_FINALIZE_LEGACY_USER_DATA_MIGRATION,
+            operationId,
+            instanceId,
+        ),
+    )
+
     fun requestCancelJob(operationId: String, targetOperationId: String): Boolean =
         requestBoundCommand(
             StmCoreProtocol.targetCommandMessage(

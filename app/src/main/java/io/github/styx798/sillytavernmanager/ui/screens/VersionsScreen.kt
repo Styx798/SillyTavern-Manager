@@ -1512,6 +1512,14 @@ private fun StmCoreJobType.displayName(): String = when (this) {
     StmCoreJobType.ROLLBACK -> stringResource(R.string.st_job_type_rollback)
     StmCoreJobType.REMOVE -> stringResource(R.string.st_job_type_remove)
     StmCoreJobType.MIGRATE -> stringResource(R.string.st_job_type_migrate)
+    StmCoreJobType.USER_DATA_BACKUP -> stringResource(R.string.user_data_creating_backup)
+    StmCoreJobType.USER_DATA_IMPORT -> stringResource(R.string.user_data_importing)
+    StmCoreJobType.USER_DATA_RESTORE -> stringResource(R.string.user_data_restoring)
+    StmCoreJobType.USER_DATA_DELETE_BACKUP ->
+        stringResource(R.string.user_data_deleting_backup)
+    StmCoreJobType.USER_DATA_MIGRATE,
+    StmCoreJobType.USER_DATA_FINALIZE_MIGRATION,
+    -> stringResource(R.string.user_data_migrating)
 }
 
 @Composable

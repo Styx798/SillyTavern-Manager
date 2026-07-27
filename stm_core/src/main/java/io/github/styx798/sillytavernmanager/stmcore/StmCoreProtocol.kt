@@ -22,6 +22,12 @@ internal object StmCoreProtocol {
     const val MESSAGE_RESTART_CORE = 15
     const val MESSAGE_CLOSE_CORE = 16
     const val MESSAGE_APP_TASK_REMOVED = 17
+    const val MESSAGE_CREATE_USER_DATA_BACKUP = 18
+    const val MESSAGE_REPLACE_USER_DATA = 19
+    const val MESSAGE_RESTORE_USER_DATA_BACKUP = 20
+    const val MESSAGE_DELETE_USER_DATA_BACKUP = 21
+    const val MESSAGE_MIGRATE_LEGACY_USER_DATA = 22
+    const val MESSAGE_FINALIZE_LEGACY_USER_DATA_MIGRATION = 23
 
     private const val KEY_OPERATION_ID = "operation_id"
     private const val KEY_TARGET_ID = "target_id"
@@ -30,6 +36,9 @@ internal object StmCoreProtocol {
     private const val KEY_SOURCE_DESCRIPTOR = "source_descriptor"
     private const val KEY_INSTALL_MODE = "install_mode"
     private const val KEY_INSTANCE_ID = "instance_id"
+    private const val KEY_DISPLAY_NAME = "display_name"
+    private const val KEY_BACKUP_FILE_NAME = "backup_file_name"
+    private const val KEY_BACKUP_FIRST = "backup_first"
 
     fun commandMessage(what: Int, operationId: String): Message =
         Message.obtain(null, what).apply {
@@ -49,6 +58,66 @@ internal object StmCoreProtocol {
 
     fun hasInvalidInstanceId(message: Message): Boolean =
         message.data.containsKey(KEY_INSTANCE_ID) && instanceIdFrom(message) == null
+
+    fun userDataCommandMessage(
+        what: Int,
+        operationId: String,
+        instanceId: String,
+        displayName: String? = null,
+        backupFileName: String? = null,
+    ): Message = commandMessage(what, operationId).apply {
+        data.putString(KEY_INSTANCE_ID, instanceId)
+        displayName?.let { data.putString(KEY_DISPLAY_NAME, it) }
+        backupFileName?.let { data.putString(KEY_BACKUP_FILE_NAME, it) }
+    }
+
+    fun replaceUserDataMessage(
+        operationId: String,
+        instanceId: String,
+        displayName: String,
+        sourceDescriptor: ParcelFileDescriptor,
+        backupFirst: Boolean,
+    ): Message = userDataCommandMessage(
+        MESSAGE_REPLACE_USER_DATA,
+        operationId,
+        instanceId,
+        displayName = displayName,
+    ).apply {
+        data.putParcelable(KEY_SOURCE_DESCRIPTOR, sourceDescriptor)
+        data.putBoolean(KEY_BACKUP_FIRST, backupFirst)
+    }
+
+    fun userDataRequestFrom(message: Message): StmCoreUserDataRequest? {
+        val operationId = operationIdFrom(message) ?: return null
+        val instanceId = instanceIdFrom(message) ?: return null
+        val displayName = message.data.getString(KEY_DISPLAY_NAME)
+            ?.takeIf { it.isNotBlank() && it.length <= 160 }
+        val backupFileName = message.data.getString(KEY_BACKUP_FILE_NAME)
+            ?.takeIf(::isSafeBackupFileName)
+        return StmCoreUserDataRequest(
+            operationId = operationId,
+            instanceId = instanceId,
+            displayName = displayName,
+            backupFileName = backupFileName,
+            backupFirst = message.data.getBoolean(KEY_BACKUP_FIRST),
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    fun userDataImportRequestFrom(message: Message): StmCoreUserDataImportRequest? {
+        val descriptor = message.data.getParcelable<ParcelFileDescriptor>(
+            KEY_SOURCE_DESCRIPTOR,
+        ) ?: return null
+        val request = userDataRequestFrom(message) ?: run {
+            descriptor.close()
+            return null
+        }
+        if (request.displayName == null) {
+            descriptor.close()
+            return null
+        }
+        return StmCoreUserDataImportRequest(request, descriptor)
+    }
 
     fun targetCommandMessage(what: Int, operationId: String, targetId: String): Message =
         commandMessage(what, operationId).apply {
@@ -151,6 +220,8 @@ internal object StmCoreProtocol {
         }
     }
 
+    fun closeSourceDescriptor(message: Message) = closeImportDescriptor(message)
+
     fun stateMessage(state: StmCoreState): Message =
         Message.obtain(null, MESSAGE_STATE).apply {
             data = StmCoreStateBundleCodec.toBundle(state)
@@ -173,6 +244,9 @@ internal object StmCoreProtocol {
 
     private fun isSafeCacheFileName(value: String): Boolean =
         value.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,119}\\.zip"))
+
+    private fun isSafeBackupFileName(value: String): Boolean =
+        value.matches(Regex("[\\p{L}\\p{N}_-][\\p{L}\\p{N}_.-]{0,119}\\.zip"))
 
     private fun installModeFrom(message: Message): StmCoreInstallMode? {
         val encoded = message.data.getString(KEY_INSTALL_MODE)
@@ -204,6 +278,19 @@ data class StmCoreImportRequest(
     val sourceDescriptor: ParcelFileDescriptor,
     val artifact: StmCoreArtifact,
     val installMode: StmCoreInstallMode,
+)
+
+data class StmCoreUserDataRequest(
+    val operationId: String,
+    val instanceId: String,
+    val displayName: String?,
+    val backupFileName: String?,
+    val backupFirst: Boolean,
+)
+
+data class StmCoreUserDataImportRequest(
+    val request: StmCoreUserDataRequest,
+    val sourceDescriptor: ParcelFileDescriptor,
 )
 
 private object StmCoreStateBundleCodec {
