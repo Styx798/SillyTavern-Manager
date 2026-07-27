@@ -1,17 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">开发版本 v0.0.3</string>
+    <string name="app_subtitle">开发版本 v0.0.4</string>
 
     <string name="nav_dashboard">主页</string>
     <string name="nav_tavern">酒馆</string>
     <string name="nav_versions">ST 管理</string>
-    <string name="nav_logs">日志</string>
+    <string name="nav_st_logs">ST 后台</string>
+    <string name="nav_logs">STM 诊断</string>
     <string name="nav_settings">设置</string>
     <string name="open_navigation_menu">打开导航菜单</string>
 
     <string name="dashboard_title">总览</string>
-    <string name="dashboard_intro">查看 STM Core 状态，并管理 SillyTavern 下载归档。</string>
+    <string name="dashboard_intro">查看 STM Core，并控制当前 SillyTavern 实例。</string>
     <string name="runtime_status_title">STM Core 状态</string>
     <string name="runtime_stopped">Feather Engine 处于待机</string>
     <string name="runtime_starting">Feather Engine 正在启动</string>
@@ -69,6 +70,8 @@
     <string name="st_runtime_no_active">没有活动 ST 版本</string>
     <string name="st_runtime_running_version">正在运行 ST %1$s</string>
     <string name="st_runtime_stopped_version">ST %1$s 已停止</string>
+    <string name="st_runtime_running_instance">%1$s 正在运行 · ST %2$s</string>
+    <string name="st_runtime_stopped_instance">%1$s 已停止 · ST %2$s</string>
     <string name="st_runtime_status_starting">正在启动并等待本机健康检查。</string>
     <string name="st_runtime_status_running">本机服务会持续运行，直到你主动停止。</string>
     <string name="st_runtime_status_stopping">正在优雅停止本机服务。</string>
@@ -288,6 +291,12 @@
 
     <string name="logs_title">日志与技术记录</string>
     <string name="logs_intro">查看 Core 状态、维护任务、内部 Slot 证据和 STM 应用事件。这里的记录不会冒充已安装的 ST 版本。</string>
+    <string name="st_logs_title">SillyTavern 后台</string>
+    <string name="st_logs_intro">这里显示真实 SillyTavern Node 会话的实时输出，仅在打开本页面时读取日志。</string>
+    <string name="st_logs_truncated">当前显示最新 500 行，更早的输出不在本页展示。</string>
+    <string name="st_logs_empty">暂时没有输出</string>
+    <string name="st_logs_unavailable">SillyTavern 尚未产生日志</string>
+    <string name="st_logs_empty_body">启动 SillyTavern 后，可在这里查看原生后台输出。</string>
     <string name="logs_export_title">导出故障诊断报告</string>
     <string name="logs_export_body">保存一份有容量上限的文本报告，包含设备、WebView、Core、Slot、任务、STM 事件与近期 SillyTavern Node 日志。报告可能含本机路径和技术信息，分享前请先检查。</string>
     <string name="logs_export_action">导出报告</string>
@@ -317,6 +326,12 @@
     <string name="settings_language_system">跟随系统语言</string>
     <string name="settings_language_chinese">简体中文</string>
     <string name="settings_language_english">English</string>
+    <string name="settings_diagnostics_title">诊断</string>
+    <string name="settings_diagnostics_entry_title">STM 日志与技术记录</string>
+    <string name="settings_diagnostics_entry_summary">查看 Core 状态、维护任务、诊断导出和 STM 应用事件。</string>
+    <string name="settings_advanced_title">高级功能</string>
+    <string name="settings_advanced_st_entry_title">高级 ST 维护</string>
+    <string name="settings_advanced_st_entry_summary">打开下载、预览版本地构筑、完整校验、回滚和程序 Slot 等技术操作。</string>
     <string name="settings_files_title">应用数据</string>
     <string name="settings_files_entry_title">管理 STM 文件</string>
     <string name="settings_files_entry_summary">浏览 STM 私有数据区，编辑文本文件或删除文件。</string>
@@ -357,4 +372,42 @@
     <string name="files_error_too_large">App 内只允许编辑不超过 1 MB 的文本文件。</string>
     <string name="files_error_unsupported">内置文本编辑器不支持这种文件类型。</string>
     <string name="files_back_to_settings">返回设置</string>
+    <string name="st_simple_title">SillyTavern</string>
+    <string name="st_simple_intro">安装官方版本，并管理你亲自命名的 ST 实例。</string>
+    <string name="st_simple_available_title">安装 ST 版本</string>
+    <string name="st_simple_official_version">官方正式版 · %1$s</string>
+    <string name="st_simple_signed_note">使用 STM 的签名快速安装流程。</string>
+    <string name="st_simple_install_action">安装这个版本</string>
+    <string name="st_simple_install_dialog_title">给这个 ST 实例起名</string>
+    <string name="st_simple_install_confirm">开始安装</string>
+    <string name="st_simple_built_title">已构筑的 ST 版本</string>
+    <string name="st_simple_built_empty">还没有构筑好的 ST 版本。</string>
+    <string name="st_instances_title">已安装的 ST 实例</string>
+    <string name="st_instances_empty">还没有安装 ST 实例。</string>
+    <string name="st_instance_version">官方 ST %1$s</string>
+    <string name="st_instance_current">当前实例</string>
+    <string name="st_instance_select">使用这个实例</string>
+    <string name="st_instance_rename">改名</string>
+    <string name="st_instance_rename_title">修改 ST 实例名称</string>
+    <string name="st_instance_rename_confirm">保存名称</string>
+    <string name="st_instance_name_label">实例名称</string>
+    <string name="st_instance_name_explanation">这个名字用于区分你的不同 ST 实例，不会改变其官方 ST 版本。</string>
+    <string name="st_instance_error_title">实例操作失败</string>
+    <string name="st_install_progress_title">正在安装 SillyTavern</string>
+    <string name="st_install_complete_title">ST 实例已就绪</string>
+    <string name="st_install_failed_title">安装已停止</string>
+    <string name="st_install_cancelled_title">安装已取消</string>
+    <string name="st_install_step_source">获取官方 ST 程序包</string>
+    <string name="st_install_step_verify">验证并解压程序包</string>
+    <string name="st_install_step_runtime">准备签名运行层</string>
+    <string name="st_install_step_acceptance">在本机启动 ST 完成就绪检查</string>
+    <string name="st_install_step_instance">创建已命名的实例</string>
+    <string name="st_install_error_invalid_name">请选择有效的实例名称。%1$s</string>
+    <string name="st_install_error_duplicate_name">这个实例名称已经被使用。%1$s</string>
+    <string name="st_install_error_download">无法下载官方程序包。%1$s</string>
+    <string name="st_install_error_core">STM Core 无法开始安装。%1$s</string>
+    <string name="st_install_error_install">签名安装流程未能完成。%1$s</string>
+    <string name="st_install_error_registry">ST 已准备完成，但无法保存实例记录。%1$s</string>
+    <string name="st_install_error_activation">首个实例已准备完成，但无法设为当前实例。%1$s</string>
+    <string name="st_install_error_unknown">安装未能完成。%1$s</string>
 </resources>

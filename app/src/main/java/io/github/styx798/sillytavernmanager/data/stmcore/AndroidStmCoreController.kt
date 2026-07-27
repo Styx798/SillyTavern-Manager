@@ -71,7 +71,8 @@ class AndroidStmCoreController(context: Context) :
         }
     }
 
-    override suspend fun start(): StmCoreCommandResult = withContext(Dispatchers.Main.immediate) {
+    override suspend fun start(instanceId: String?): StmCoreCommandResult =
+        withContext(Dispatchers.Main.immediate) {
         if (mutableConnectionState.value != StmCoreConnectionState.CONNECTED) {
             return@withContext StmCoreCommandResult.Rejected(
                 "STM Core is still establishing its durable control state",
@@ -110,7 +111,7 @@ class AndroidStmCoreController(context: Context) :
         deliverConnectedCoreCommand(
             connectionState = mutableConnectionState.value,
             unavailableReason = "Android could not bind the private STM Core service",
-            delivery = { client.connectAndStart(operationId) },
+            delivery = { client.connectAndStart(operationId, instanceId) },
             onDeliveryFailure = {
                 client.releasePreparedSillyTavernForeground()
                 observeIpcFailure("Android could not bind the private STM Core service")

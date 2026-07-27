@@ -90,9 +90,9 @@ class StmCoreClient(
             )
         }.isSuccess
 
-    fun connectAndStart(operationId: String): Boolean {
+    fun connectAndStart(operationId: String, instanceId: String? = null): Boolean {
         checkMainThread()
-        val command = StmCoreProtocol.commandMessage(StmCoreProtocol.MESSAGE_START, operationId)
+        val command = StmCoreProtocol.startMessage(operationId, instanceId)
         outgoingMessenger?.let { return send(command) }
         if (!enqueue(command)) return false
         if (connect()) return true

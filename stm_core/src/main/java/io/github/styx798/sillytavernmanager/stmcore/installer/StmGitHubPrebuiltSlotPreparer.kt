@@ -1,6 +1,7 @@
 package io.github.styx798.sillytavernmanager.stmcore.installer
 
 import io.github.styx798.sillytavernmanager.stmcore.BuildConfig
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreSupportedVersions
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -48,8 +49,8 @@ internal object StmPrebuiltRuntimeCatalog {
 
     val ST_1_18_0 = StmPrebuiltRuntimeCatalogEntry(
         repository = "https://github.com/SillyTavern/SillyTavern",
-        commitSha = "8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8",
-        stVersion = "1.18.0",
+        commitSha = StmCoreSupportedVersions.SIGNED_STABLE_COMMIT,
+        stVersion = StmCoreSupportedVersions.SIGNED_STABLE,
         packageLockSha256 =
             "7484f87e7dc6e99044ad532b80111c3e93463aaf1d5dbe377b3a4486bfe65f6f",
         downloadUrl =

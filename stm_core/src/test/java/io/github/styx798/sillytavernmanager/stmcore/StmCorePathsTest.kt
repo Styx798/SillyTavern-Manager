@@ -1,6 +1,7 @@
 package io.github.styx798.sillytavernmanager.stmcore
 
 import java.nio.file.Files
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -8,6 +9,46 @@ import org.junit.Assume.assumeNoException
 import org.junit.Test
 
 class StmCorePathsTest {
+    @Test
+    fun `instance data roots are isolated while null retains legacy data`() {
+        val files = Files.createTempDirectory("stm-instance-data").toFile()
+        val first = "08f9bb2b-60f5-4d45-916c-ece2dc1acd40"
+        val second = "77eae5e7-ab20-4d76-8e7e-dfc99adc9086"
+
+        assertEquals(
+            files.resolve("stm_data").canonicalFile,
+            StmCorePaths.prepareInstanceDataRootAt(files, null).canonicalFile,
+        )
+        assertEquals(
+            files.resolve("stm_instances/$first/data").canonicalFile,
+            StmCorePaths.prepareInstanceDataRootAt(files, first).canonicalFile,
+        )
+        assertEquals(
+            files.resolve("stm_instances/$second/data").canonicalFile,
+            StmCorePaths.prepareInstanceDataRootAt(files, second).canonicalFile,
+        )
+        assertFalse(
+            StmCorePaths.prepareInstanceDataRootAt(files, first).canonicalFile ==
+                StmCorePaths.prepareInstanceDataRootAt(files, second).canonicalFile,
+        )
+    }
+
+    @Test
+    fun `instance data root rejects traversal and symlinked instance directories`() {
+        val root = Files.createTempDirectory("stm-instance-data-safety").toFile()
+        assertThrows(IllegalArgumentException::class.java) {
+            StmCorePaths.prepareInstanceDataRootAt(root, "../outside")
+        }
+
+        val instances = root.resolve("stm_instances").apply { mkdirs() }
+        val outside = root.resolve("outside").apply { mkdirs() }
+        val id = "08f9bb2b-60f5-4d45-916c-ece2dc1acd40"
+        createSymlinkOrSkip(instances.resolve(id), outside)
+        assertThrows(IllegalArgumentException::class.java) {
+            StmCorePaths.prepareInstanceDataRootAt(root, id)
+        }
+    }
+
     @Test
     fun `reserved path matching does not capture sibling app data`() {
         val root = Files.createTempDirectory("stm-core-paths").toFile().canonicalFile

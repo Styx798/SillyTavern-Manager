@@ -43,6 +43,25 @@ object StmCorePaths {
     fun dataRoot(context: Context): File =
         lexicalChild(context.filesDir, DATA_DIRECTORY)
 
+    fun instancesRoot(context: Context): File =
+        lexicalChild(context.filesDir, INSTANCES_DIRECTORY)
+
+    fun prepareInstanceDataRoot(context: Context, instanceId: String?): File {
+        return prepareInstanceDataRootAt(context.filesDir, instanceId)
+    }
+
+    internal fun prepareInstanceDataRootAt(filesDirectory: File, instanceId: String?): File {
+        val filesRoot = filesDirectory.toPath().toAbsolutePath().normalize()
+        requireRealDirectory(filesRoot, "Android files root")
+        if (instanceId == null) {
+            return initializeDirectChild(filesRoot, DATA_DIRECTORY).toFile()
+        }
+        require(instanceId.matches(UUID_ID)) { "ST instance ID is invalid" }
+        val instances = initializeDirectChild(filesRoot, INSTANCES_DIRECTORY)
+        val instance = initializeDirectChild(instances, instanceId)
+        return initializeDirectChild(instance, INSTANCE_DATA_DIRECTORY).toFile()
+    }
+
     fun cacheRoot(context: Context): File =
         lexicalChild(context.cacheDir, CORE_DIRECTORY)
 
@@ -80,6 +99,7 @@ object StmCorePaths {
     fun reservedRoots(context: Context): List<File> = listOf(
         coreRoot(context),
         dataRoot(context),
+        instancesRoot(context),
         cacheRoot(context),
     )
 
@@ -147,5 +167,11 @@ object StmCorePaths {
     private const val TOOLCHAINS_DIRECTORY = "toolchains"
     private const val LOGS_DIRECTORY = "logs"
     private const val DATA_DIRECTORY = "stm_data"
+    private const val INSTANCES_DIRECTORY = "stm_instances"
+    private const val INSTANCE_DATA_DIRECTORY = "data"
     private const val SESSIONS_DIRECTORY = "sessions"
+    private val UUID_ID = Regex(
+        "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        RegexOption.IGNORE_CASE,
+    )
 }

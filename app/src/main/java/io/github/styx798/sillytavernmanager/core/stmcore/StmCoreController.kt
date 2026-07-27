@@ -21,7 +21,7 @@ interface StmCoreController {
     fun resumeAppTask()
 
     /** Starts the selected SillyTavern slot. Core itself enters standby when the app binds. */
-    suspend fun start(): StmCoreCommandResult
+    suspend fun start(instanceId: String? = null): StmCoreCommandResult
 
     /** Completion or failure is represented by a higher-revision [StmCoreState]. */
     suspend fun stop(): StmCoreCommandResult

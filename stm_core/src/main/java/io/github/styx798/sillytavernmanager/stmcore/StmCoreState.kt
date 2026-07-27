@@ -5,6 +5,11 @@ import java.security.SecureRandom
 const val STM_CORE_PROTOCOL_VERSION = 5
 const val STM_CORE_WEB_SESSION_COOKIE_NAME = "stm_core_session"
 
+object StmCoreSupportedVersions {
+    const val SIGNED_STABLE = "1.18.0"
+    const val SIGNED_STABLE_COMMIT = "8172dcd0ee672d3cd9a5e5f7af134f91a45cd2b8"
+}
+
 class StmCoreWebSessionCredential private constructor(
     val value: String,
 ) {

@@ -20,6 +20,22 @@ internal data class ResolvedStDownload(
     val resolvedAtEpochMillis: Long,
 )
 
+internal fun resolveExactStDownload(
+    channel: StDownloadChannel,
+    exactCommit: String,
+    resolvedAtEpochMillis: Long,
+): ResolvedStDownload {
+    val commit = requireExactCommitSha(exactCommit)
+    require(resolvedAtEpochMillis > 0) { "Resolved download time must be positive." }
+    return ResolvedStDownload(
+        channel = channel,
+        exactCommit = commit,
+        archiveUrl = channel.exactArchiveUrl(commit),
+        fileName = channel.exactArchiveFileName(commit),
+        resolvedAtEpochMillis = resolvedAtEpochMillis,
+    )
+}
+
 internal class GitHubCommitResolver(
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val connectionFactory: (URL) -> HttpURLConnection = { url ->
@@ -43,13 +59,7 @@ internal class GitHubCommitResolver(
                 throw fallbackFailure
             }
         }
-        return ResolvedStDownload(
-            channel = channel,
-            exactCommit = exactCommit,
-            archiveUrl = channel.exactArchiveUrl(exactCommit),
-            fileName = channel.exactArchiveFileName(exactCommit),
-            resolvedAtEpochMillis = nowEpochMillis(),
-        )
+        return resolveExactStDownload(channel, exactCommit, nowEpochMillis())
     }
 
     private fun resolveFromRestApi(channel: StDownloadChannel): String {
@@ -475,7 +485,7 @@ private const val CONNECT_TIMEOUT_MILLIS = 5_000
 private const val READ_TIMEOUT_MILLIS = 10_000
 private const val GITHUB_JSON_ACCEPT = "application/vnd.github+json"
 private const val GITHUB_API_VERSION = "2022-11-28"
-private const val USER_AGENT = "SillyTavern-Manager/0.0.3"
+private const val USER_AGENT = "SillyTavern-Manager/0.0.4"
 private const val GIT_ADVERTISEMENT_ACCEPT = "application/x-git-upload-pack-advertisement"
 private const val GIT_HEAD_REF_PREFIX = "refs/heads/"
 private const val PACKET_LENGTH_HEX_DIGITS = 4

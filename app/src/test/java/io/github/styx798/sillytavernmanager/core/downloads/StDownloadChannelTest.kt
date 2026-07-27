@@ -1,5 +1,6 @@
 package io.github.styx798.sillytavernmanager.core.downloads
 
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreSupportedVersions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -36,6 +37,20 @@ class StDownloadChannelTest {
             assertFalse(url.contains("refs/heads"))
             assertFalse(url.endsWith("/${channel.branch}.zip"))
         }
+    }
+
+    @Test
+    fun `signed stable release has a fixed official source identity`() {
+        assertEquals("1.18.0", StmCoreSupportedVersions.SIGNED_STABLE)
+        assertEquals(
+            StmCoreSupportedVersions.SIGNED_STABLE_COMMIT,
+            requireExactCommitSha(StmCoreSupportedVersions.SIGNED_STABLE_COMMIT),
+        )
+        assertTrue(
+            StDownloadChannel.STABLE
+                .exactArchiveUrl(StmCoreSupportedVersions.SIGNED_STABLE_COMMIT)
+                .endsWith("/${StmCoreSupportedVersions.SIGNED_STABLE_COMMIT}.zip"),
+        )
     }
 
     @Test
