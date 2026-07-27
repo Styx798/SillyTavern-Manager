@@ -1,5 +1,6 @@
 package io.github.styx798.sillytavernmanager.data.downloads
 
+import io.github.styx798.sillytavernmanager.BuildConfig
 import io.github.styx798.sillytavernmanager.core.downloads.StDownloadChannel
 import io.github.styx798.sillytavernmanager.core.downloads.requireExactCommitSha
 import java.io.ByteArrayOutputStream
@@ -485,7 +486,7 @@ private const val CONNECT_TIMEOUT_MILLIS = 5_000
 private const val READ_TIMEOUT_MILLIS = 10_000
 private const val GITHUB_JSON_ACCEPT = "application/vnd.github+json"
 private const val GITHUB_API_VERSION = "2022-11-28"
-private const val USER_AGENT = "SillyTavern-Manager/0.0.4"
+private val USER_AGENT = "SillyTavern-Manager/${BuildConfig.VERSION_NAME}"
 private const val GIT_ADVERTISEMENT_ACCEPT = "application/x-git-upload-pack-advertisement"
 private const val GIT_HEAD_REF_PREFIX = "refs/heads/"
 private const val PACKET_LENGTH_HEX_DIGITS = 4

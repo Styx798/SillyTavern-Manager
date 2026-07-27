@@ -61,6 +61,8 @@ interface StInstanceRepository {
 
     fun remove(instanceId: String): Result<Unit>
 
+    fun updateDataMode(instanceId: String, dataMode: StInstanceDataMode): Result<Unit>
+
     fun clearError()
 }
 

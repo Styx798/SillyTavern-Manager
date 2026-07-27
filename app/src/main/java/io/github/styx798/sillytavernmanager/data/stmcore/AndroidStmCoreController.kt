@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Environment
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.net.Uri
 import io.github.styx798.sillytavernmanager.BuildConfig
 import io.github.styx798.sillytavernmanager.core.downloads.DownloadedStArchive
 import io.github.styx798.sillytavernmanager.core.downloads.StArchiveIdentityClassification
@@ -330,6 +331,81 @@ class AndroidStmCoreController(context: Context) :
 
     override suspend fun verifySlot(slotId: String): StmCoreCommandResult =
         deliverMaintenanceCommand { operationId -> client.requestVerifySlot(operationId, slotId) }
+
+    override suspend fun createUserDataBackup(
+        instanceId: String,
+        displayName: String,
+    ): StmCoreCommandResult = deliverMaintenanceCommand { operationId ->
+        client.requestCreateUserDataBackup(operationId, instanceId, displayName)
+    }
+
+    override suspend fun replaceUserData(
+        instanceId: String,
+        displayName: String,
+        source: Uri,
+        backupFirst: Boolean,
+    ): StmCoreCommandResult {
+        if (mutableConnectionState.value != StmCoreConnectionState.CONNECTED) {
+            return StmCoreCommandResult.Rejected("The STM Core control state is not connected")
+        }
+        val descriptor = withContext(Dispatchers.IO) {
+            runCatching {
+                requireNotNull(appContext.contentResolver.openFileDescriptor(source, "r")) {
+                    "Android did not provide the selected user-data archive"
+                }
+            }
+        }.getOrElse { error ->
+            return StmCoreCommandResult.Rejected(
+                error.message ?: "Android could not open the selected user-data archive",
+            )
+        }
+        return withContext(Dispatchers.Main.immediate) {
+            descriptor.use {
+                val operationId = UUID.randomUUID().toString()
+                deliverConnectedCoreCommand(
+                    connectionState = mutableConnectionState.value,
+                    unavailableReason = "The STM Core control connection is unavailable",
+                    delivery = {
+                        client.requestReplaceUserData(
+                            operationId,
+                            instanceId,
+                            displayName,
+                            descriptor,
+                            backupFirst,
+                        )
+                    },
+                    onDeliveryFailure = {
+                        observeIpcFailure("The STM Core control connection is unavailable")
+                    },
+                )
+            }
+        }
+    }
+
+    override suspend fun restoreUserDataBackup(
+        instanceId: String,
+        backupFileName: String,
+    ): StmCoreCommandResult = deliverMaintenanceCommand { operationId ->
+        client.requestRestoreUserDataBackup(operationId, instanceId, backupFileName)
+    }
+
+    override suspend fun deleteUserDataBackup(
+        instanceId: String,
+        backupFileName: String,
+    ): StmCoreCommandResult = deliverMaintenanceCommand { operationId ->
+        client.requestDeleteUserDataBackup(operationId, instanceId, backupFileName)
+    }
+
+    override suspend fun migrateLegacyUserData(instanceId: String): StmCoreCommandResult =
+        deliverMaintenanceCommand { operationId ->
+            client.requestMigrateLegacyUserData(operationId, instanceId)
+        }
+
+    override suspend fun finalizeLegacyUserDataMigration(
+        instanceId: String,
+    ): StmCoreCommandResult = deliverMaintenanceCommand { operationId ->
+        client.requestFinalizeLegacyUserDataMigration(operationId, instanceId)
+    }
 
     override fun onCoreStateChanged(state: StmCoreState) {
         if (closedByUser || detachedAfterTaskRemoval) return

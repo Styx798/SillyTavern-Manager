@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">Development build v0.0.4</string>
+    <string name="app_subtitle">Development build v0.0.5</string>
 
     <string name="nav_dashboard">Home</string>
     <string name="nav_tavern">Tavern</string>
     <string name="nav_versions">ST Manager</string>
     <string name="nav_st_logs">ST backend</string>
+    <string name="nav_user_data">Data backups</string>
     <string name="nav_logs">STM diagnostics</string>
     <string name="nav_settings">Settings</string>
     <string name="open_navigation_menu">Open navigation menu</string>
@@ -277,6 +278,7 @@
 
     <string name="action_cancel">Cancel</string>
     <string name="action_delete">Delete</string>
+    <string name="action_refresh">Refresh</string>
     <string name="action_dismiss">Dismiss</string>
     <string name="action_reload">Reload</string>
     <string name="wait_continue">Continue waiting</string>
@@ -410,4 +412,33 @@
     <string name="st_install_error_registry">ST was prepared, but the instance record could not be saved. %1$s</string>
     <string name="st_install_error_activation">The first instance was prepared, but it could not be selected. %1$s</string>
     <string name="st_install_error_unknown">Installation did not complete. %1$s</string>
+    <string name="user_data_title">Data backups</string>
+    <string name="user_data_intro">Back up, import, and restore the user data for each named SillyTavern instance. These actions require that SillyTavern is stopped.</string>
+    <string name="user_data_empty">Install a SillyTavern instance before managing user data.</string>
+    <string name="user_data_create_backup">Back up now</string>
+    <string name="user_data_import">Import data</string>
+    <string name="user_data_restore">Restore</string>
+    <string name="user_data_export">Export</string>
+    <string name="user_data_no_backups">No backups for this instance.</string>
+    <string name="user_data_orphaned_backups">Backups from removed instances</string>
+    <string name="user_data_stop_required">Stop SillyTavern before changing its user data.</string>
+    <string name="user_data_migration_required">The data from an earlier STM version must be moved into this instance before it can be backed up.</string>
+    <string name="user_data_retry_migration">Retry data migration</string>
+    <string name="user_data_import_warning_title">Replace this instance’s user data?</string>
+    <string name="user_data_import_warning_body">This completely replaces the current characters, chats, presets, settings, worlds, themes, and user extensions. The program slot and STM backups are not changed.</string>
+    <string name="user_data_import_backup_then_replace">Back up, then replace</string>
+    <string name="user_data_import_replace_without_backup">Replace without backup</string>
+    <string name="user_data_restore_title">Restore this backup?</string>
+    <string name="user_data_restore_warning">The current user data will be completely replaced. Create a separate backup first if you may need it later.</string>
+    <string name="user_data_restore_confirm">Restore and replace</string>
+    <string name="user_data_delete_backup_title">Delete this backup?</string>
+    <string name="user_data_delete_backup_warning">This removes the STM private backup. An exported copy is not affected.</string>
+    <string name="user_data_export_complete">Backup exported</string>
+    <string name="user_data_operation_failed">Data operation failed</string>
+    <string name="user_data_operation_in_progress">Keep STM open while Core completes this operation.</string>
+    <string name="user_data_creating_backup">Creating user-data backup</string>
+    <string name="user_data_importing">Importing and replacing user data</string>
+    <string name="user_data_restoring">Restoring user-data backup</string>
+    <string name="user_data_deleting_backup">Deleting backup</string>
+    <string name="user_data_migrating">Moving earlier STM data into the named instance</string>
 </resources>

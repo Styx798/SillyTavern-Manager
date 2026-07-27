@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SillyTavern Manager</string>
-    <string name="app_subtitle">开发版本 v0.0.4</string>
+    <string name="app_subtitle">开发版本 v0.0.5</string>
 
     <string name="nav_dashboard">主页</string>
     <string name="nav_tavern">酒馆</string>
     <string name="nav_versions">ST 管理</string>
     <string name="nav_st_logs">ST 后台</string>
+    <string name="nav_user_data">数据备份</string>
     <string name="nav_logs">STM 诊断</string>
     <string name="nav_settings">设置</string>
     <string name="open_navigation_menu">打开导航菜单</string>
@@ -277,6 +278,7 @@
 
     <string name="action_cancel">取消</string>
     <string name="action_delete">删除</string>
+    <string name="action_refresh">刷新</string>
     <string name="action_dismiss">关闭</string>
     <string name="action_reload">重新加载</string>
     <string name="wait_continue">继续等待</string>
@@ -410,4 +412,33 @@
     <string name="st_install_error_registry">ST 已准备完成，但无法保存实例记录。%1$s</string>
     <string name="st_install_error_activation">首个实例已准备完成，但无法设为当前实例。%1$s</string>
     <string name="st_install_error_unknown">安装未能完成。%1$s</string>
+    <string name="user_data_title">数据备份</string>
+    <string name="user_data_intro">备份、导入和恢复每个具名 SillyTavern 实例的用户数据。执行这些操作前必须先关闭 SillyTavern。</string>
+    <string name="user_data_empty">请先安装一个 SillyTavern 实例，再管理用户数据。</string>
+    <string name="user_data_create_backup">立即备份</string>
+    <string name="user_data_import">导入数据</string>
+    <string name="user_data_restore">恢复</string>
+    <string name="user_data_export">导出</string>
+    <string name="user_data_no_backups">这个实例还没有备份。</string>
+    <string name="user_data_orphaned_backups">已移除实例留下的备份</string>
+    <string name="user_data_stop_required">请先关闭 SillyTavern，再修改它的用户数据。</string>
+    <string name="user_data_migration_required">需要先把旧版 STM 的数据移动到这个实例，才能进行备份。</string>
+    <string name="user_data_retry_migration">重试数据迁移</string>
+    <string name="user_data_import_warning_title">覆盖这个实例的用户数据？</string>
+    <string name="user_data_import_warning_body">这会完整替换当前角色卡、聊天、预设、设置、世界书、主题和用户扩展。程序槽和 STM 备份不会被修改。</string>
+    <string name="user_data_import_backup_then_replace">备份后覆盖</string>
+    <string name="user_data_import_replace_without_backup">不备份，直接覆盖</string>
+    <string name="user_data_restore_title">恢复这个备份？</string>
+    <string name="user_data_restore_warning">当前用户数据会被完整替换。如果之后可能还需要，请先另外创建备份。</string>
+    <string name="user_data_restore_confirm">恢复并覆盖</string>
+    <string name="user_data_delete_backup_title">删除这个备份？</string>
+    <string name="user_data_delete_backup_warning">这会删除 STM 私有备份，已经导出的副本不受影响。</string>
+    <string name="user_data_export_complete">备份已导出</string>
+    <string name="user_data_operation_failed">数据操作失败</string>
+    <string name="user_data_operation_in_progress">Core 完成此操作前请保持 STM 打开。</string>
+    <string name="user_data_creating_backup">正在创建用户数据备份</string>
+    <string name="user_data_importing">正在导入并覆盖用户数据</string>
+    <string name="user_data_restoring">正在恢复用户数据备份</string>
+    <string name="user_data_deleting_backup">正在删除备份</string>
+    <string name="user_data_migrating">正在把旧版 STM 数据移动到具名实例</string>
 </resources>

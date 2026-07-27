@@ -9,6 +9,7 @@ import io.github.styx798.sillytavernmanager.core.logging.DiagnosticLogExporter
 import io.github.styx798.sillytavernmanager.core.logging.SillyTavernLogReader
 import io.github.styx798.sillytavernmanager.core.stmcore.StmCoreController
 import io.github.styx798.sillytavernmanager.core.settings.SettingsRepository
+import io.github.styx798.sillytavernmanager.core.userdata.UserDataBackupRepository
 import io.github.styx798.sillytavernmanager.data.downloads.AndroidStDownloadRepository
 import io.github.styx798.sillytavernmanager.data.files.AndroidAppFilesRepository
 import io.github.styx798.sillytavernmanager.data.instances.SharedPreferencesStInstanceRepository
@@ -17,6 +18,7 @@ import io.github.styx798.sillytavernmanager.data.logging.AndroidDiagnosticLogExp
 import io.github.styx798.sillytavernmanager.data.logging.AndroidSillyTavernLogReader
 import io.github.styx798.sillytavernmanager.data.stmcore.AndroidStmCoreController
 import io.github.styx798.sillytavernmanager.data.settings.SharedPreferencesSettingsRepository
+import io.github.styx798.sillytavernmanager.data.userdata.AndroidUserDataBackupRepository
 
 interface AppContainer {
     val diagnosticLogExporter: DiagnosticLogExporter
@@ -27,6 +29,7 @@ interface AppContainer {
     val instanceRepository: StInstanceRepository
     val downloadRepository: StDownloadRepository
     val filesRepository: AppFilesRepository
+    val userDataBackupRepository: UserDataBackupRepository
 }
 
 class DefaultAppContainer(context: Context) : AppContainer {
@@ -41,4 +44,6 @@ class DefaultAppContainer(context: Context) : AppContainer {
         SharedPreferencesStInstanceRepository(context)
     override val downloadRepository: StDownloadRepository = AndroidStDownloadRepository(context)
     override val filesRepository: AppFilesRepository = AndroidAppFilesRepository(context)
+    override val userDataBackupRepository: UserDataBackupRepository =
+        AndroidUserDataBackupRepository(context)
 }

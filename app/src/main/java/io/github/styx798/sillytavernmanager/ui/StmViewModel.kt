@@ -34,6 +34,10 @@ import io.github.styx798.sillytavernmanager.stmcore.StmCoreWaitKind
 import io.github.styx798.sillytavernmanager.core.settings.AppLanguage
 import io.github.styx798.sillytavernmanager.core.settings.SettingsRepository
 import io.github.styx798.sillytavernmanager.core.settings.ThemeMode
+import io.github.styx798.sillytavernmanager.core.userdata.UserDataBackupRepository
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobState
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreJobType
+import io.github.styx798.sillytavernmanager.stmcore.StmCoreRunState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,6 +56,8 @@ class StmViewModel(container: AppContainer) : ViewModel() {
     private val downloadRepository: StDownloadRepository = container.downloadRepository
     private val filesRepository: AppFilesRepository = container.filesRepository
     private val instanceRepository: StInstanceRepository = container.instanceRepository
+    private val userDataBackupRepository: UserDataBackupRepository =
+        container.userDataBackupRepository
     private val mutableAppFilesState = MutableStateFlow(AppFilesState())
     private val mutableDiagnosticLogExportState = MutableStateFlow(DiagnosticLogExportState())
     private val mutableSillyTavernLogSnapshot = MutableStateFlow(SillyTavernLogSnapshot())
@@ -64,6 +70,8 @@ class StmViewModel(container: AppContainer) : ViewModel() {
     )
     private var sillyTavernLogPollingJob: Job? = null
     private var pendingSelectionInstanceId: String? = null
+    private val attemptedLegacyMigrations = mutableSetOf<String>()
+    private val observedUserDataTerminalJobs = mutableSetOf<String>()
 
     val stmCoreState = stmCoreController.state
     val stmCoreConnectionState = stmCoreController.connectionState
@@ -75,6 +83,7 @@ class StmViewModel(container: AppContainer) : ViewModel() {
     val sillyTavernLogSnapshot = mutableSillyTavernLogSnapshot.asStateFlow()
     val instanceState = instanceRepository.state
     val instanceInstallState = instanceInstallCoordinator.state
+    val userDataBackupState = userDataBackupRepository.state
 
     init {
         viewModelScope.launch {
@@ -82,8 +91,11 @@ class StmViewModel(container: AppContainer) : ViewModel() {
                 adoptLegacyInstanceIfNeeded(state)
                 reconcileActiveInstance(state)
                 completePendingInstanceSelection(state)
+                reconcileLegacyDataMigration(state)
+                refreshAfterUserDataOperation(state)
             }
         }
+        refreshUserDataBackups()
     }
 
     fun setSillyTavernLogsVisible(visible: Boolean) {
@@ -160,6 +172,77 @@ class StmViewModel(container: AppContainer) : ViewModel() {
 
     fun clearInstanceError() {
         instanceRepository.clearError()
+    }
+
+    fun refreshUserDataBackups() {
+        viewModelScope.launch(Dispatchers.IO) {
+            userDataBackupRepository.refresh()
+        }
+    }
+
+    fun clearUserDataBackupResult() {
+        userDataBackupRepository.clearResult()
+    }
+
+    fun createUserDataBackup(instanceId: String) {
+        val instance = instanceRepository.state.value.instances
+            .singleOrNull { it.id == instanceId }
+            ?: return
+        dispatchCoreCommand {
+            stmCoreController.createUserDataBackup(instance.id, instance.displayName)
+        }
+    }
+
+    fun replaceUserData(instanceId: String, source: Uri, backupFirst: Boolean) {
+        val instance = instanceRepository.state.value.instances
+            .singleOrNull { it.id == instanceId }
+            ?: return
+        dispatchCoreCommand {
+            stmCoreController.replaceUserData(
+                instance.id,
+                instance.displayName,
+                source,
+                backupFirst,
+            )
+        }
+    }
+
+    fun restoreUserDataBackup(instanceId: String, backupFileName: String) {
+        dispatchCoreCommand {
+            stmCoreController.restoreUserDataBackup(instanceId, backupFileName)
+        }
+    }
+
+    fun deleteUserDataBackup(instanceId: String, backupFileName: String) {
+        dispatchCoreCommand {
+            stmCoreController.deleteUserDataBackup(instanceId, backupFileName)
+        }
+    }
+
+    fun exportUserDataBackup(
+        instanceId: String,
+        backupFileName: String,
+        destination: Uri,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = userDataBackupRepository.export(
+                instanceId,
+                backupFileName,
+                destination,
+            )
+            if (result.isFailure) {
+                logRepository.append(
+                    source = LogSource.APP,
+                    level = LogLevel.ERROR,
+                    message = result.exceptionOrNull()?.message ?: "User-data backup export failed",
+                )
+            }
+        }
+    }
+
+    fun retryLegacyDataMigration(instanceId: String) {
+        attemptedLegacyMigrations.remove(instanceId)
+        reconcileLegacyDataMigration(stmCoreState.value)
     }
 
     fun selectInstance(instanceId: String) {
@@ -499,8 +582,77 @@ class StmViewModel(container: AppContainer) : ViewModel() {
         )
     }
 
+    private fun reconcileLegacyDataMigration(coreState: StmCoreState) {
+        val legacy = instanceRepository.state.value.instances
+            .singleOrNull { it.dataMode == StInstanceDataMode.LEGACY_SHARED_ROOT }
+            ?: return
+        val migrationJob = coreState.jobs
+            .filter {
+                it.type == StmCoreJobType.USER_DATA_MIGRATE &&
+                    it.targetId == legacy.id
+            }
+            .maxByOrNull { it.updatedAtEpochMs }
+        if (migrationJob?.state == StmCoreJobState.SUCCEEDED) {
+            if (instanceRepository.updateDataMode(
+                    legacy.id,
+                    StInstanceDataMode.ISOLATED,
+                ).isSuccess
+            ) {
+                dispatchCoreCommand {
+                    stmCoreController.finalizeLegacyUserDataMigration(legacy.id)
+                }
+            }
+            return
+        }
+        if (migrationJob?.state in setOf(
+                StmCoreJobState.QUEUED,
+                StmCoreJobState.RUNNING,
+                StmCoreJobState.CANCELLING,
+            )
+        ) {
+            return
+        }
+        if (!coreState.installerRecoveryComplete ||
+            coreState.runState != StmCoreRunState.STOPPED ||
+            coreState.jobs.any {
+                it.state in setOf(
+                    StmCoreJobState.QUEUED,
+                    StmCoreJobState.RUNNING,
+                    StmCoreJobState.CANCELLING,
+                )
+            } ||
+            !attemptedLegacyMigrations.add(legacy.id)
+        ) {
+            return
+        }
+        dispatchCoreCommand {
+            stmCoreController.migrateLegacyUserData(legacy.id)
+        }
+    }
+
+    private fun refreshAfterUserDataOperation(coreState: StmCoreState) {
+        val completed = coreState.jobs.filter {
+            it.type in USER_DATA_JOB_TYPES &&
+                it.state in setOf(
+                    StmCoreJobState.SUCCEEDED,
+                    StmCoreJobState.FAILED,
+                    StmCoreJobState.CANCELLED,
+                )
+        }
+        if (completed.none { observedUserDataTerminalJobs.add(it.operationId) }) return
+        refreshUserDataBackups()
+    }
+
     private companion object {
         const val SILLY_TAVERN_LOG_REFRESH_MILLIS = 1_000L
+        val USER_DATA_JOB_TYPES = setOf(
+            StmCoreJobType.USER_DATA_BACKUP,
+            StmCoreJobType.USER_DATA_IMPORT,
+            StmCoreJobType.USER_DATA_RESTORE,
+            StmCoreJobType.USER_DATA_DELETE_BACKUP,
+            StmCoreJobType.USER_DATA_MIGRATE,
+            StmCoreJobType.USER_DATA_FINALIZE_MIGRATION,
+        )
     }
 
     class Factory(

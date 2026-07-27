@@ -28,7 +28,9 @@ import io.github.styx798.sillytavernmanager.stmcore.installer.StmInstallerCoordi
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmInstallerEvent
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmInstallerSubmission
 import io.github.styx798.sillytavernmanager.stmcore.installer.StmSlotVerificationResult
+import io.github.styx798.sillytavernmanager.stmcore.userdata.StmUserDataManager
 import java.io.File
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -44,6 +46,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     private lateinit var checkpointStore: StmCoreCheckpointStore
     private lateinit var engine: FeatherEngine
     private lateinit var installerCoordinator: StmInstallerCoordinator
+    private lateinit var userDataManager: StmUserDataManager
     private lateinit var state: StmCoreState
     private lateinit var committedState: StmCoreState
     private val checkpointExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -51,6 +54,9 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     }
     private val runtimeVerificationExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "STM-Core-Runtime-Verify").apply { isDaemon = true }
+    }
+    private val userDataExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "STM-Core-User-Data").apply { isDaemon = true }
     }
     private val checkpointPersistenceFailed = AtomicBoolean(false)
     private var watchdog: Runnable? = null
@@ -99,6 +105,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         cancelWatchdog()
         releaseSessionForeground()
         runtimeVerificationExecutor.shutdownNow()
+        userDataExecutor.shutdownNow()
         if (::installerCoordinator.isInitialized) installerCoordinator.close()
         checkpointExecutor.shutdownNow()
         if (::engine.isInitialized) engine.destroy()
@@ -114,6 +121,13 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         checkpointExecutor.execute {
             try {
                 StmCorePaths.initializeCoreLayout(this)
+                val recoveredUserDataManager = StmUserDataManager(
+                    legacyDataRoot = StmCorePaths.dataRoot(this),
+                    instancesRoot = StmCorePaths.instancesRoot(this),
+                    backupsRoot = StmCorePaths.backupsRoot(this),
+                    cacheRoot = StmCorePaths.installerCacheRoot(this),
+                )
+                recoveredUserDataManager.recoverInterruptedOperations()
                 val recovered = recoverState(checkpointStore.read())
                 checkpointStore.write(recovered)
                 val localRuntimePreparer = StmDeviceLocalNpmSlotPreparer(this)
@@ -142,6 +156,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     state = recovered
                     committedState = recovered
                     installerCoordinator = coordinator
+                    userDataManager = recoveredUserDataManager
                     initializationComplete = true
                     logState(recovered)
                     broadcastCommittedState()
@@ -688,9 +703,10 @@ class StmCoreService : Service(), FeatherEngine.Callback {
     private fun handleIncomingMessage(message: Message): Boolean {
         if (message.sendingUid != applicationInfo.uid) {
             if (message.what == StmCoreProtocol.MESSAGE_IMPORT_ARTIFACT ||
-                message.what == StmCoreProtocol.MESSAGE_INSTALL_IMPORTED_ARTIFACT
+                message.what == StmCoreProtocol.MESSAGE_INSTALL_IMPORTED_ARTIFACT ||
+                message.what == StmCoreProtocol.MESSAGE_REPLACE_USER_DATA
             ) {
-                StmCoreProtocol.closeImportDescriptor(message)
+                StmCoreProtocol.closeSourceDescriptor(message)
             }
             Log.w(TAG, "Rejected Core IPC from UID ${message.sendingUid}")
             return true
@@ -699,8 +715,11 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             message.what != StmCoreProtocol.MESSAGE_REGISTER_CLIENT &&
             message.what != StmCoreProtocol.MESSAGE_UNREGISTER_CLIENT
         ) {
-            if (message.what == StmCoreProtocol.MESSAGE_IMPORT_ARTIFACT) {
-                StmCoreProtocol.closeImportDescriptor(message)
+            if (message.what == StmCoreProtocol.MESSAGE_IMPORT_ARTIFACT ||
+                message.what == StmCoreProtocol.MESSAGE_INSTALL_IMPORTED_ARTIFACT ||
+                message.what == StmCoreProtocol.MESSAGE_REPLACE_USER_DATA
+            ) {
+                StmCoreProtocol.closeSourceDescriptor(message)
             }
             Log.w(TAG, "Rejected Core command while durable initialization is pending")
             return true
@@ -785,6 +804,36 @@ class StmCoreService : Service(), FeatherEngine.Callback {
 
             StmCoreProtocol.MESSAGE_INSTALL_IMPORTED_ARTIFACT -> {
                 handleImportMessage(message, install = true)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_CREATE_USER_DATA_BACKUP -> {
+                handleCreateUserDataBackup(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_REPLACE_USER_DATA -> {
+                handleReplaceUserData(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_RESTORE_USER_DATA_BACKUP -> {
+                handleRestoreUserDataBackup(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_DELETE_USER_DATA_BACKUP -> {
+                handleDeleteUserDataBackup(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_MIGRATE_LEGACY_USER_DATA -> {
+                handleMigrateLegacyUserData(message)
+                true
+            }
+
+            StmCoreProtocol.MESSAGE_FINALIZE_LEGACY_USER_DATA_MIGRATION -> {
+                handleFinalizeLegacyUserDataMigration(message)
                 true
             }
 
@@ -912,6 +961,248 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         "Artifact import descriptor could not be inspected: ${error.safeMessage()}"
     }
 
+    private fun handleCreateUserDataBackup(message: Message) {
+        val request = StmCoreProtocol.userDataRequestFrom(message) ?: return
+        val displayName = request.displayName ?: run {
+            publishUserDataRejection(
+                request.operationId,
+                StmCoreJobType.USER_DATA_BACKUP,
+                request.instanceId,
+                "INVALID_BACKUP_REQUEST",
+                "The instance display name is missing",
+            )
+            return
+        }
+        launchUserDataOperation(
+            request.operationId,
+            StmCoreJobType.USER_DATA_BACKUP,
+            request.instanceId,
+        ) {
+            userDataManager.createBackup(
+                request.instanceId,
+                displayName,
+                request.operationId,
+            )
+        }
+    }
+
+    private fun handleReplaceUserData(message: Message) {
+        val operationId = StmCoreProtocol.operationIdFrom(message)
+        val request = runCatching {
+            StmCoreProtocol.userDataImportRequestFrom(message)
+        }.getOrNull()
+        if (request == null) {
+            operationId?.let {
+                publishUserDataRejection(
+                    it,
+                    StmCoreJobType.USER_DATA_IMPORT,
+                    StmCoreProtocol.instanceIdFrom(message) ?: REQUEST_TARGET,
+                    "INVALID_USER_DATA_IMPORT",
+                    "The user-data archive request did not pass the Core IPC schema",
+                )
+            }
+            return
+        }
+        val source = ParcelFileDescriptor.AutoCloseInputStream(request.sourceDescriptor)
+        if (!userDataMaintenanceAllowed(
+                request.request.operationId,
+                StmCoreJobType.USER_DATA_IMPORT,
+                request.request.instanceId,
+            )
+        ) {
+            source.close()
+            return
+        }
+        launchUserDataOperation(
+            request.request.operationId,
+            StmCoreJobType.USER_DATA_IMPORT,
+            request.request.instanceId,
+            source,
+        ) {
+            userDataManager.replaceFromArchive(
+                instanceId = request.request.instanceId,
+                displayName = requireNotNull(request.request.displayName),
+                operationId = request.request.operationId,
+                source = source,
+                backupFirst = request.request.backupFirst,
+            )
+        }
+    }
+
+    private fun handleRestoreUserDataBackup(message: Message) {
+        val request = StmCoreProtocol.userDataRequestFrom(message) ?: return
+        val backupFileName = request.backupFileName ?: run {
+            publishUserDataRejection(
+                request.operationId,
+                StmCoreJobType.USER_DATA_RESTORE,
+                request.instanceId,
+                "INVALID_RESTORE_REQUEST",
+                "The selected backup file is missing",
+            )
+            return
+        }
+        launchUserDataOperation(
+            request.operationId,
+            StmCoreJobType.USER_DATA_RESTORE,
+            request.instanceId,
+        ) {
+            userDataManager.restoreBackup(
+                request.instanceId,
+                request.operationId,
+                backupFileName,
+            )
+        }
+    }
+
+    private fun handleDeleteUserDataBackup(message: Message) {
+        val request = StmCoreProtocol.userDataRequestFrom(message) ?: return
+        val backupFileName = request.backupFileName ?: run {
+            publishUserDataRejection(
+                request.operationId,
+                StmCoreJobType.USER_DATA_DELETE_BACKUP,
+                request.instanceId,
+                "INVALID_DELETE_BACKUP_REQUEST",
+                "The selected backup file is missing",
+            )
+            return
+        }
+        launchUserDataOperation(
+            request.operationId,
+            StmCoreJobType.USER_DATA_DELETE_BACKUP,
+            request.instanceId,
+        ) {
+            userDataManager.deleteBackup(request.instanceId, backupFileName)
+        }
+    }
+
+    private fun handleMigrateLegacyUserData(message: Message) {
+        val request = StmCoreProtocol.userDataRequestFrom(message) ?: return
+        launchUserDataOperation(
+            request.operationId,
+            StmCoreJobType.USER_DATA_MIGRATE,
+            request.instanceId,
+        ) {
+            userDataManager.migrateLegacyData(request.instanceId, request.operationId)
+        }
+    }
+
+    private fun handleFinalizeLegacyUserDataMigration(message: Message) {
+        val request = StmCoreProtocol.userDataRequestFrom(message) ?: return
+        launchUserDataOperation(
+            request.operationId,
+            StmCoreJobType.USER_DATA_FINALIZE_MIGRATION,
+            request.instanceId,
+        ) {
+            userDataManager.finalizeLegacyMigration(request.instanceId)
+        }
+    }
+
+    private fun launchUserDataOperation(
+        operationId: String,
+        type: StmCoreJobType,
+        instanceId: String,
+        closeOnRejected: InputStream? = null,
+        operation: () -> Unit,
+    ) {
+        if (!userDataMaintenanceAllowed(operationId, type, instanceId)) {
+            closeOnRejected?.close()
+            return
+        }
+        val now = System.currentTimeMillis()
+        val running = StmCoreJob(
+            operationId = operationId,
+            type = type,
+            targetId = instanceId,
+            phase = StmCoreJobPhase.PREFLIGHT,
+            state = StmCoreJobState.RUNNING,
+            startedAtEpochMs = now,
+            updatedAtEpochMs = now,
+        )
+        publish(afterDurableCommit = {
+            userDataExecutor.execute {
+                val outcome = runCatching(operation)
+                closeOnRejected?.close()
+                mainHandler.post {
+                    if (serviceDestroyed) return@post
+                    val completedAt = System.currentTimeMillis()
+                    val terminal = if (outcome.isSuccess) {
+                        running.copy(
+                            phase = StmCoreJobPhase.COMPLETE,
+                            state = StmCoreJobState.SUCCEEDED,
+                            updatedAtEpochMs = maxOf(completedAt, now),
+                            progress = 1.0,
+                        )
+                    } else {
+                        val detail = outcome.exceptionOrNull()?.safeMessage()
+                            ?: "User-data operation failed"
+                        running.copy(
+                            phase = StmCoreJobPhase.COMPLETE,
+                            state = StmCoreJobState.FAILED,
+                            updatedAtEpochMs = maxOf(completedAt, now),
+                            error = StmCoreError(
+                                domain = "user_data",
+                                code = "USER_DATA_OPERATION_FAILED",
+                                summary = detail.take(MAX_ERROR_SUMMARY_LENGTH),
+                                diagnosticDetail = detail.take(MAX_ERROR_DETAIL_LENGTH),
+                            ),
+                        )
+                    }
+                    publish(afterDurableCommit = { maybeFinishCoreShutdown() }) {
+                        copy(
+                            jobs = jobs.upsertJob(terminal),
+                            summary = "Core ${type.name.lowercase()} job is " +
+                                terminal.state.name.lowercase(),
+                        )
+                    }
+                }
+            }
+        }) {
+            copy(
+                jobs = jobs.upsertJob(running),
+                summary = "Core ${type.name.lowercase()} job is running",
+            )
+        }
+    }
+
+    private fun userDataMaintenanceAllowed(
+        operationId: String,
+        type: StmCoreJobType,
+        instanceId: String,
+    ): Boolean {
+        if (!isValidStmCoreInstanceId(instanceId)) {
+            publishUserDataRejection(
+                operationId,
+                type,
+                REQUEST_TARGET,
+                "INVALID_INSTANCE_ID",
+                "The ST instance ID is invalid",
+            )
+            return false
+        }
+        if (!maintenanceAllowed(operationId, type, instanceId)) return false
+        if (state.jobs.any { it.state in ACTIVE_JOB_STATES }) {
+            publishUserDataRejection(
+                operationId,
+                type,
+                instanceId,
+                "MAINTENANCE_BUSY",
+                "Another Core maintenance operation is active",
+            )
+            return false
+        }
+        return true
+    }
+
+    private fun publishUserDataRejection(
+        operationId: String,
+        type: StmCoreJobType,
+        instanceId: String,
+        code: String,
+        detail: String,
+    ) {
+        publishMaintenanceRejection(operationId, type, instanceId, code, detail)
+    }
+
     private fun nextSlotRevision(operationId: String, slotId: String): Long? {
         val highestSlotRevision = state.slots.maxOfOrNull(StmCoreSlot::revision) ?: 0
         if (highestSlotRevision != Long.MAX_VALUE) return highestSlotRevision + 1
@@ -1008,8 +1299,9 @@ class StmCoreService : Service(), FeatherEngine.Callback {
 
     private fun beginOwnerLossShutdown(reason: String) {
         if (!initializationComplete || processTerminationScheduled || shutdownMode != null) return
-        val hasMaintenance = ::installerCoordinator.isInitialized &&
-            installerCoordinator.hasActiveOperation()
+        val hasMaintenance = (::installerCoordinator.isInitialized &&
+            installerCoordinator.hasActiveOperation()) ||
+            state.jobs.any { it.state in ACTIVE_JOB_STATES }
         val hasLiveSession = state.runState == StmCoreRunState.STARTING ||
             state.runState == StmCoreRunState.RUNNING ||
             state.runState == StmCoreRunState.DRAINING
@@ -1036,6 +1328,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
         if (shutdownMode == null ||
             processTerminationScheduled ||
             (::installerCoordinator.isInitialized && installerCoordinator.hasActiveOperation()) ||
+            state.jobs.any { it.state in ACTIVE_JOB_STATES } ||
             state.runState == StmCoreRunState.STARTING ||
             state.runState == StmCoreRunState.RUNNING ||
             state.runState == StmCoreRunState.DRAINING
@@ -1636,6 +1929,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                 val interrupted = previous.runState == StmCoreRunState.STARTING ||
                     previous.runState == StmCoreRunState.RUNNING ||
                     previous.runState == StmCoreRunState.DRAINING
+                val recoveredJobs = recoverInterruptedUserDataJobs(previous.jobs, now)
                 previous.copy(
                     revision = recoveredCoreRevision(previous.revision),
                     operationId = if (interrupted) previous.operationId else null,
@@ -1643,6 +1937,7 @@ class StmCoreService : Service(), FeatherEngine.Callback {
                     processIdentity = processIdentity,
                     processId = pid,
                     installerRecoveryComplete = false,
+                    jobs = recoveredJobs,
                     runState = if (interrupted || revisionEpochReset) {
                         StmCoreRunState.CRASHED
                     } else {
@@ -1775,6 +2070,14 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             StmCoreJobState.RUNNING,
             StmCoreJobState.CANCELLING,
         )
+        val USER_DATA_JOB_TYPES = setOf(
+            StmCoreJobType.USER_DATA_BACKUP,
+            StmCoreJobType.USER_DATA_IMPORT,
+            StmCoreJobType.USER_DATA_RESTORE,
+            StmCoreJobType.USER_DATA_DELETE_BACKUP,
+            StmCoreJobType.USER_DATA_MIGRATE,
+            StmCoreJobType.USER_DATA_FINALIZE_MIGRATION,
+        )
 
         fun serviceIntent(context: Context, action: String): Intent =
             Intent(context, StmCoreService::class.java).setAction(action)
@@ -1787,6 +2090,30 @@ internal fun shouldApplyRecoveredTerminalJob(existing: StmCoreJob?): Boolean =
         StmCoreJobState.FAILED,
         StmCoreJobState.CANCELLED,
     )
+
+internal fun recoverInterruptedUserDataJobs(
+    jobs: List<StmCoreJob>,
+    recoveredAtEpochMs: Long,
+): List<StmCoreJob> = jobs.map { job ->
+    if (job.type in StmCoreService.USER_DATA_JOB_TYPES &&
+        job.state in StmCoreService.ACTIVE_JOB_STATES
+    ) {
+        job.copy(
+            phase = StmCoreJobPhase.CLEANING_UP,
+            state = StmCoreJobState.FAILED,
+            updatedAtEpochMs = maxOf(recoveredAtEpochMs, job.updatedAtEpochMs),
+            progress = null,
+            error = StmCoreError(
+                domain = "user_data",
+                code = "CORE_PROCESS_INTERRUPTED",
+                summary = "The user-data operation was interrupted",
+                diagnosticDetail = "Recovered ${job.operationId} during Core startup",
+            ),
+        )
+    } else {
+        job
+    }
+}
 
 internal fun shouldRetainCoreForAppReconnect(
     state: StmCoreState,
