@@ -1470,7 +1470,8 @@ class StmCoreService : Service(), FeatherEngine.Callback {
             operationId,
             StmCoreJobType.REMOVE,
             targetId,
-            installerCoordinator.remove(operationId, target, state.activeSlot, state.runningSlot),
+            installerCoordinator.remove(operationId, target, state.activeSlot, state.runningSlot,
+                StmCoreProtocol.releasesSlotReferences(message)),
         )
     }
 

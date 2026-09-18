@@ -51,12 +51,45 @@ fun StManagementScreen(
     installState: StInstanceInstallState,
     onInstallStable: (String) -> Unit,
     onCancelInstall: () -> Unit,
+    onRetryInstall: (Boolean) -> Unit,
     onDismissInstall: () -> Unit,
     onRenameInstance: (String, String) -> Unit,
     onSelectInstance: (String) -> Unit,
+    onRemoveInstanceProgram: (String) -> Unit,
     onClearInstanceError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var pendingRemoveId by rememberSaveable { mutableStateOf<String?>(null) }
+    pendingRemoveId?.let { id ->
+        val instance = instanceState.instances.singleOrNull { it.id == id }
+        if (instance != null) AlertDialog(
+            onDismissRequest = { pendingRemoveId = null },
+            title = { Text(stringResource(R.string.instance_remove_program)) },
+            text = { Text(stringResource(R.string.instance_remove_program_body, instance.displayName)) },
+            confirmButton = { TextButton(onClick = {
+                pendingRemoveId = null
+                onRemoveInstanceProgram(id)
+            }) { Text(stringResource(R.string.instance_remove_program)) } },
+            dismissButton = { TextButton(onClick = { pendingRemoveId = null }) {
+                Text(stringResource(R.string.action_cancel))
+            } },
+        )
+    }
+    var confirmLocalBuild by rememberSaveable { mutableStateOf(false) }
+    if (confirmLocalBuild) {
+        AlertDialog(
+            onDismissRequest = { confirmLocalBuild = false },
+            title = { Text(stringResource(R.string.st_install_local_confirm_title)) },
+            text = { Text(stringResource(R.string.st_install_local_confirm_body)) },
+            confirmButton = { TextButton(onClick = {
+                confirmLocalBuild = false
+                onRetryInstall(true)
+            }) { Text(stringResource(R.string.st_install_local_confirm_action)) } },
+            dismissButton = { TextButton(onClick = { confirmLocalBuild = false }) {
+                Text(stringResource(R.string.action_cancel))
+            } },
+        )
+    }
     var showInstallDialog by rememberSaveable { mutableStateOf(false) }
     var pendingRenameId by rememberSaveable { mutableStateOf<String?>(null) }
     if (showInstallDialog) {
@@ -157,6 +190,8 @@ fun StManagementScreen(
         if (installState.phase != StInstanceInstallPhase.IDLE) {
             item {
                 InstallProgressCard(
+                    onRetry = { onRetryInstall(false) },
+                    onLocalBuild = { confirmLocalBuild = true },
                     state = installState,
                     onCancel = onCancelInstall,
                     onDismiss = onDismissInstall,
@@ -169,7 +204,11 @@ fun StManagementScreen(
         item {
             InstancesCard(
                 instances = instanceState.instances,
-                activeInstanceId = instanceState.activeInstanceId,
+                activeInstanceId = instanceState.instances.singleOrNull {
+                    it.slotId == coreState.activeSlot?.slotId
+                }?.id,
+                programSlotIds = coreState.slots.map { it.id }.toSet(),
+                onRemove = { pendingRemoveId = it },
                 canSelect = canManage,
                 onRename = { pendingRenameId = it },
                 onSelect = onSelectInstance,
@@ -220,6 +259,8 @@ private fun InstalledVersionsCard(coreState: StmCoreState) {
 @Composable
 private fun InstancesCard(
     instances: List<StInstance>,
+    programSlotIds: Set<String>,
+    onRemove: (String) -> Unit,
     activeInstanceId: String?,
     canSelect: Boolean,
     onRename: (String) -> Unit,
@@ -245,6 +286,8 @@ private fun InstancesCard(
                     if (index > 0) HorizontalDivider()
                     InstanceRow(
                         instance = instance,
+                        programAvailable = instance.slotId in programSlotIds,
+                        onRemove = { onRemove(instance.id) },
                         active = instance.id == activeInstanceId,
                         canSelect = canSelect,
                         onRename = { onRename(instance.id) },
@@ -259,6 +302,8 @@ private fun InstancesCard(
 @Composable
 private fun InstanceRow(
     instance: StInstance,
+    programAvailable: Boolean,
+    onRemove: () -> Unit,
     active: Boolean,
     canSelect: Boolean,
     onRename: () -> Unit,
@@ -290,11 +335,19 @@ private fun InstanceRow(
                 )
             }
         }
+        if (!programAvailable) {
+            Text(stringResource(R.string.instance_program_removed))
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (programAvailable) {
+                TextButton(onClick = onRemove, enabled = canSelect) {
+                    Text(stringResource(R.string.instance_remove_program))
+                }
+            }
             TextButton(onClick = onRename) {
                 Text(stringResource(R.string.st_instance_rename))
             }
-            if (!active) {
+            if (!active && programAvailable) {
                 OutlinedButton(onClick = onSelect, enabled = canSelect) {
                     Text(stringResource(R.string.st_instance_select))
                 }
@@ -305,6 +358,8 @@ private fun InstanceRow(
 
 @Composable
 private fun InstallProgressCard(
+    onRetry: () -> Unit,
+    onLocalBuild: () -> Unit,
     state: StInstanceInstallState,
     onCancel: () -> Unit,
     onDismiss: () -> Unit,
@@ -359,6 +414,12 @@ private fun InstallProgressCard(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+            if (state.canRetry) {
+                OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.st_install_retry_fast)) }
+            }
+            if (state.canChooseLocalBuild) {
+                OutlinedButton(onClick = onLocalBuild) { Text(stringResource(R.string.st_install_use_local)) }
+            }
             if (state.active) {
                 OutlinedButton(
                     onClick = onCancel,
@@ -380,7 +441,7 @@ private fun InstallProgressCard(
 }
 
 @Composable
-private fun NameInstanceDialog(
+internal fun NameInstanceDialog(
     @StringRes titleRes: Int,
     initialName: String,
     @StringRes confirmRes: Int,

@@ -54,6 +54,19 @@ data class StInstanceInstallState(
             StInstanceInstallPhase.CANCELLING,
         )
 
+    val canChooseLocalBuild: Boolean
+        get() = phase == StInstanceInstallPhase.FAILED &&
+            failure == StInstanceInstallFailure.INSTALL_FAILED &&
+            installMode == StmCoreInstallMode.FAST_SIGNED_RUNTIME &&
+            failureCode in setOf(
+                "PREBUILT_RUNTIME_TRANSPORT_UNAVAILABLE",
+                "PREBUILT_RUNTIME_NOT_AVAILABLE",
+            )
+
+    val canRetry: Boolean
+        get() = phase == StInstanceInstallPhase.FAILED &&
+            (failure == StInstanceInstallFailure.DOWNLOAD_FAILED || canChooseLocalBuild)
+
     val terminal: Boolean
         get() = phase in setOf(
             StInstanceInstallPhase.COMPLETE,

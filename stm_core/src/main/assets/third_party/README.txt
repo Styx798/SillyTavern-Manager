@@ -1,13 +1,12 @@
 STM Core 0.1.0 embeds one Javet Android Node artifact at build time:
 
-  default: com.caoccao.javet:javet-node-android-i18n:5.0.9
-  comparison (-PstmJavetI18n=false): com.caoccao.javet:javet-node-android:5.0.9
+  com.caoccao.javet:javet-node-android-i18n:5.0.9
 
-The build extracts the authoritative license files shipped inside the selected AAR into:
+The build extracts the authoritative license files shipped inside the i18n AAR into:
 
-  third_party/<selected-artifact>-5.0.9/LICENSE
-  third_party/<selected-artifact>-5.0.9/LICENSE.node
-  third_party/<selected-artifact>-5.0.9/LICENSE.v8
+  third_party/javet-node-android-i18n-5.0.9/LICENSE
+  third_party/javet-node-android-i18n-5.0.9/LICENSE.node
+  third_party/javet-node-android-i18n-5.0.9/LICENSE.v8
 
 Upstream project: https://github.com/caoccao/Javet
 Javet license: Apache License 2.0

@@ -11,6 +11,34 @@ import org.junit.Test
 
 class StmActiveSlotStoreTest {
     @Test
+    fun `released rollback reference cannot reappear through the backup record`() {
+        val file = newActiveFile()
+        val store = StmActiveSlotStore(file)
+        store.write(firstPointer())
+        val current = secondPointer()
+        store.write(current)
+        val released = requireNotNull(store.releaseReference(requireNotNull(current.previous),
+            java.util.UUID.randomUUID().toString()))
+        assertEquals(null, released.previous)
+        assertEquals(current.current, released.current)
+        file.writeBytes(byteArrayOf(1, 2, 3))
+        val recovered = store.read() as StmActiveSlotReadResult.Loaded
+        assertEquals(released, recovered.stored.pointer)
+    }
+
+    @Test
+    fun `releasing current removes both authoritative records`() {
+        val file = newActiveFile()
+        val store = StmActiveSlotStore(file)
+        store.write(firstPointer())
+        store.write(secondPointer())
+        assertEquals(null, store.releaseReference(secondPointer().current,
+            java.util.UUID.randomUUID().toString()))
+        assertEquals(StmActiveSlotReadResult.Missing, store.read())
+        assertEquals(StmActiveSlotReadResult.Missing, StmActiveSlotStore(file).read())
+    }
+
+    @Test
     fun `round trip returns verified checksum and current source`() {
         val activeFile = newActiveFile()
         val store = StmActiveSlotStore(activeFile)

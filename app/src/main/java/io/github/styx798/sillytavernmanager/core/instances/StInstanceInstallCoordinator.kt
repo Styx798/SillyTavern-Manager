@@ -53,6 +53,8 @@ class StInstanceInstallCoordinator(
     fun install(
         displayName: String,
         channel: StDownloadChannel = StDownloadChannel.STABLE,
+        installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+        exactCommit: String? = null,
     ) {
         if (mutableState.value.active) return
         val normalizedName = runCatching { requireValidInstanceName(displayName) }
@@ -78,13 +80,13 @@ class StInstanceInstallCoordinator(
             )
             return
         }
-        val instanceId = UUID.randomUUID().toString()
-        val installMode = if (channel == StDownloadChannel.PREVIEW) {
-            StmCoreInstallMode.LOCAL_NPM_BUILD
-        } else {
-            StmCoreInstallMode.FAST_SIGNED_RUNTIME
+        val previous = mutableState.value
+        if (previous.terminal) {
+            val pendingId = instanceRepository.state.value.pendingInstall?.instanceId
+            if (pendingId != null && instanceRepository.clearPendingInstall(pendingId).isFailure) return
         }
-        val expectedCommit = if (channel == StDownloadChannel.STABLE) {
+        val instanceId = UUID.randomUUID().toString()
+        val expectedCommit = exactCommit ?: if (channel == StDownloadChannel.STABLE) {
             StmCoreSupportedVersions.SIGNED_STABLE_COMMIT
         } else {
             null
@@ -132,6 +134,18 @@ class StInstanceInstallCoordinator(
         }
     }
 
+    fun retry(localBuildConfirmed: Boolean = false) {
+        val previous = mutableState.value
+        if (!previous.canRetry || (localBuildConfirmed && !previous.canChooseLocalBuild)) return
+        install(
+            displayName = previous.displayName ?: return,
+            channel = previous.channel ?: return,
+            installMode = if (localBuildConfirmed) StmCoreInstallMode.LOCAL_NPM_BUILD
+                else previous.installMode ?: return,
+            exactCommit = previous.expectedCommitSha,
+        )
+    }
+
     fun cancel() {
         val install = mutableState.value
         if (!install.active) return
@@ -152,7 +166,10 @@ class StInstanceInstallCoordinator(
     }
 
     fun dismiss() {
-        if (!mutableState.value.terminal) return
+        val install = mutableState.value
+        if (!install.terminal) return
+        val pendingId = instanceRepository.state.value.pendingInstall?.instanceId
+        if (pendingId != null && instanceRepository.clearPendingInstall(pendingId).isFailure) return
         mutableState.value = StInstanceInstallState()
     }
 
@@ -406,12 +423,13 @@ class StInstanceInstallCoordinator(
     }
 
     private fun fail(failure: StInstanceInstallFailure, failureCode: String?) {
-        clearPending(mutableState.value)
-        mutableState.value = mutableState.value.copy(
+        val failed = mutableState.value.copy(
             phase = StInstanceInstallPhase.FAILED,
             failure = failure,
             failureCode = failureCode?.lineSequence()?.firstOrNull()?.take(120),
         )
+        if (!failed.canRetry) clearPending(failed)
+        mutableState.value = failed
     }
 
     private fun clearPending(install: StInstanceInstallState) {

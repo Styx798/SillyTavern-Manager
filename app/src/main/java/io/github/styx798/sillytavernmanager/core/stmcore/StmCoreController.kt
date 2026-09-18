@@ -65,7 +65,7 @@ interface StmCoreController {
 
     suspend fun rollback(): StmCoreCommandResult
 
-    suspend fun remove(slotId: String): StmCoreCommandResult
+    suspend fun remove(slotId: String, releaseReferences: Boolean = false): StmCoreCommandResult
 
     /** Explicit slow diagnostic: re-hashes every file in the selected immutable slot. */
     suspend fun verifySlot(slotId: String): StmCoreCommandResult

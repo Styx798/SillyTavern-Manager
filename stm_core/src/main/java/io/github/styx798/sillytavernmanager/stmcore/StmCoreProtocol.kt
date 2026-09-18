@@ -124,6 +124,14 @@ internal object StmCoreProtocol {
             data.putString(KEY_TARGET_ID, targetId)
         }
 
+    fun removeMessage(operationId: String, slotId: String, releaseReferences: Boolean): Message =
+        targetCommandMessage(MESSAGE_REMOVE_SLOT, operationId, slotId).apply {
+            data.putBoolean("release_slot_references", releaseReferences)
+        }
+
+    fun releasesSlotReferences(message: Message): Boolean =
+        message.data.getBoolean("release_slot_references", false)
+
     fun targetIdFrom(message: Message): String? =
         message.data.getString(KEY_TARGET_ID)?.takeIf(::isSafeId)
 

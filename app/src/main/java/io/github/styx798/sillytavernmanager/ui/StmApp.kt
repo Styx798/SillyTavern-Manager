@@ -62,7 +62,6 @@ import io.github.styx798.sillytavernmanager.R
 import io.github.styx798.sillytavernmanager.core.settings.AppLanguage
 import io.github.styx798.sillytavernmanager.core.settings.AppSettings
 import io.github.styx798.sillytavernmanager.core.settings.ThemeMode
-import io.github.styx798.sillytavernmanager.ui.screens.AppFilesScreen
 import io.github.styx798.sillytavernmanager.ui.screens.DashboardScreen
 import io.github.styx798.sillytavernmanager.ui.screens.LogsScreen
 import io.github.styx798.sillytavernmanager.ui.screens.SettingsScreen
@@ -88,7 +87,6 @@ private enum class StmDestination(
     SETTINGS(R.string.nav_settings, Icons.Default.Settings),
     DIAGNOSTICS(R.string.nav_logs, Icons.AutoMirrored.Filled.List, false),
     ADVANCED_ST(R.string.settings_advanced_st_entry_title, Icons.Default.Settings, false),
-    FILES(R.string.files_title, Icons.AutoMirrored.Filled.List, false),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,7 +106,6 @@ fun StmApp(
     val stmCoreConnectionState by viewModel.stmCoreConnectionState.collectAsStateWithLifecycle()
     val logEntries by viewModel.logEntries.collectAsStateWithLifecycle()
     val downloadState by viewModel.downloadState.collectAsStateWithLifecycle()
-    val appFilesState by viewModel.appFilesState.collectAsStateWithLifecycle()
     val diagnosticLogExportState by viewModel.diagnosticLogExportState
         .collectAsStateWithLifecycle()
     val sillyTavernLogSnapshot by viewModel.sillyTavernLogSnapshot.collectAsStateWithLifecycle()
@@ -223,16 +220,6 @@ fun StmApp(
         )
     }
 
-    BackHandler(enabled = destination == StmDestination.FILES) {
-        if (appFilesState.editor != null) {
-            viewModel.closeAppFileEditor()
-        } else if (appFilesState.listing?.relativeDirectory?.isNotBlank() == true) {
-            viewModel.navigateUpInAppFiles()
-        } else {
-            destinationName = StmDestination.SETTINGS.name
-        }
-    }
-
     BackHandler(enabled = destination == StmDestination.DIAGNOSTICS) {
         destinationName = StmDestination.SETTINGS.name
     }
@@ -281,7 +268,6 @@ fun StmApp(
                     TopAppBar(
                         navigationIcon = {
                             if (destination in setOf(
-                                    StmDestination.FILES,
                                     StmDestination.DIAGNOSTICS,
                                     StmDestination.ADVANCED_ST,
                                 )
@@ -359,9 +345,11 @@ fun StmApp(
                         installState = instanceInstallState,
                         onInstallStable = { name -> viewModel.installNewInstance(name) },
                         onCancelInstall = viewModel::cancelInstanceInstall,
+                        onRetryInstall = viewModel::retryInstanceInstall,
                         onDismissInstall = viewModel::dismissInstanceInstall,
                         onRenameInstance = viewModel::renameInstance,
                         onSelectInstance = viewModel::selectInstance,
+                        onRemoveInstanceProgram = viewModel::removeInstanceProgram,
                         onClearInstanceError = viewModel::clearInstanceError,
                         modifier = Modifier.padding(innerPadding),
                     )
@@ -407,7 +395,10 @@ fun StmApp(
                         onDeleteAllDownloads = viewModel::deleteAllDownloads,
                         onClearDownloadFailure = viewModel::clearDownloadFailure,
                         onImportDownloadedArchive = viewModel::importDownloadedArchive,
-                        onInstallDownloadedArchive = viewModel::installDownloadedArchive,
+                        onInstallDownloadedArchive = { name, archive, mode ->
+                            viewModel.installDownloadedArchive(name, archive, mode)
+                            destinationName = StmDestination.VERSIONS.name
+                        },
                         onActivateSlot = viewModel::activateSlot,
                         onRollback = viewModel::rollbackActiveSlot,
                         onRemoveSlot = viewModel::removeSlot,
@@ -419,10 +410,6 @@ fun StmApp(
                         settings = settings,
                         onThemeModeSelected = onThemeModeSelected,
                         onLanguageSelected = onLanguageSelected,
-                        onOpenFiles = {
-                            viewModel.openAppFiles()
-                            destinationName = StmDestination.FILES.name
-                        },
                         onOpenDiagnostics = {
                             destinationName = StmDestination.DIAGNOSTICS.name
                         },
@@ -433,18 +420,6 @@ fun StmApp(
                         modifier = Modifier.padding(innerPadding),
                     )
 
-                    StmDestination.FILES -> AppFilesScreen(
-                        state = appFilesState,
-                        onRootSelected = viewModel::selectAppFileRoot,
-                        onOpenEntry = viewModel::openAppFile,
-                        onNavigateUp = viewModel::navigateUpInAppFiles,
-                        onRefresh = viewModel::refreshAppFiles,
-                        onSaveEditor = viewModel::saveAppFile,
-                        onCloseEditor = viewModel::closeAppFileEditor,
-                        onDelete = viewModel::deleteAppFile,
-                        onClearError = viewModel::clearAppFileError,
-                        modifier = Modifier.padding(innerPadding),
-                    )
                 }
 
                 TavernScreen(

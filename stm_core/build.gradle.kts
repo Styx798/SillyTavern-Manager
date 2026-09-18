@@ -663,12 +663,7 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
-val useJavetI18n = providers.gradleProperty("stmJavetI18n")
-    .map(String::toBoolean)
-    .orElse(true)
-val javetArtifactName = useJavetI18n.map { enabled ->
-    if (enabled) "javet-node-android-i18n" else "javet-node-android"
-}
+val javetArtifactName = providers.provider { "javet-node-android-i18n" }
 val javetArtifactDirectory = javetArtifactName.map { "$it-5.0.9" }
 
 android {
@@ -837,16 +832,9 @@ dependencies {
     commonsIoLicenseArtifact(libs.commons.io) { isTransitive = false }
     commonsLang3LicenseArtifact(libs.commons.lang3) { isTransitive = false }
 
-    if (useJavetI18n.get()) {
-        implementation(libs.javet.node.android.i18n)
-        javetLicenseArtifact(libs.javet.node.android.i18n) {
-            isTransitive = false
-        }
-    } else {
-        implementation(libs.javet.node.android)
-        javetLicenseArtifact(libs.javet.node.android) {
-            isTransitive = false
-        }
+    implementation(libs.javet.node.android.i18n)
+    javetLicenseArtifact(libs.javet.node.android.i18n) {
+        isTransitive = false
     }
 
     testImplementation(libs.junit)

@@ -8,11 +8,6 @@ import io.github.styx798.sillytavernmanager.app.AppContainer
 import io.github.styx798.sillytavernmanager.core.downloads.StDownloadChannel
 import io.github.styx798.sillytavernmanager.core.downloads.DownloadedStArchive
 import io.github.styx798.sillytavernmanager.core.downloads.StDownloadRepository
-import io.github.styx798.sillytavernmanager.core.files.AppFileEntry
-import io.github.styx798.sillytavernmanager.core.files.AppFileResult
-import io.github.styx798.sillytavernmanager.core.files.AppFileRoot
-import io.github.styx798.sillytavernmanager.core.files.AppFilesRepository
-import io.github.styx798.sillytavernmanager.core.files.AppFilesState
 import io.github.styx798.sillytavernmanager.core.instances.StInstance
 import io.github.styx798.sillytavernmanager.core.instances.StInstanceDataMode
 import io.github.styx798.sillytavernmanager.core.instances.StInstanceInstallCoordinator
@@ -54,11 +49,9 @@ class StmViewModel(container: AppContainer) : ViewModel() {
     private val sillyTavernLogReader: SillyTavernLogReader = container.sillyTavernLogReader
     private val settingsRepository: SettingsRepository = container.settingsRepository
     private val downloadRepository: StDownloadRepository = container.downloadRepository
-    private val filesRepository: AppFilesRepository = container.filesRepository
     private val instanceRepository: StInstanceRepository = container.instanceRepository
     private val userDataBackupRepository: UserDataBackupRepository =
         container.userDataBackupRepository
-    private val mutableAppFilesState = MutableStateFlow(AppFilesState())
     private val mutableDiagnosticLogExportState = MutableStateFlow(DiagnosticLogExportState())
     private val mutableSillyTavernLogSnapshot = MutableStateFlow(SillyTavernLogSnapshot())
     private val instanceInstallCoordinator = StInstanceInstallCoordinator(
@@ -78,7 +71,6 @@ class StmViewModel(container: AppContainer) : ViewModel() {
     val logEntries = logRepository.entries
     val settings = settingsRepository.settings
     val downloadState = downloadRepository.state
-    val appFilesState = mutableAppFilesState.asStateFlow()
     val diagnosticLogExportState = mutableDiagnosticLogExportState.asStateFlow()
     val sillyTavernLogSnapshot = mutableSillyTavernLogSnapshot.asStateFlow()
     val instanceState = instanceRepository.state
@@ -366,23 +358,16 @@ class StmViewModel(container: AppContainer) : ViewModel() {
     }
 
     fun installDownloadedArchive(
+        displayName: String,
         archive: DownloadedStArchive,
-        installMode: StmCoreInstallMode = StmCoreInstallMode.FAST_SIGNED_RUNTIME,
+        installMode: StmCoreInstallMode,
     ) {
-        val exactCommit = archive.identity.exactCommit
-        if (exactCommit == null) {
-            logRepository.append(
-                source = LogSource.APP,
-                level = LogLevel.WARNING,
-                message = "Only an exact-commit SillyTavern archive can enter Core installation",
-            )
-            return
-        }
-        val slotId = "st-${archive.channel.branch}-${exactCommit.lowercase()}"
-        dispatchCoreCommand {
-            stmCoreController.installDownloadedArchive(slotId, archive, installMode)
-        }
+        val exactCommit = archive.identity.exactCommit ?: return
+        instanceInstallCoordinator.install(displayName, archive.channel, installMode, exactCommit)
     }
+
+    fun retryInstanceInstall(localBuildConfirmed: Boolean = false) =
+        instanceInstallCoordinator.retry(localBuildConfirmed)
 
     fun activateSlot(slotId: String) {
         val instance = instanceRepository.state.value.instances
@@ -400,6 +385,12 @@ class StmViewModel(container: AppContainer) : ViewModel() {
 
     fun rollbackActiveSlot() {
         dispatchCoreCommand(stmCoreController::rollback)
+    }
+
+    fun removeInstanceProgram(instanceId: String) {
+        val instance = instanceRepository.state.value.instances.singleOrNull { it.id == instanceId } ?: return
+        // Retain the instance identity so its data and backups remain accessible after removal.
+        dispatchCoreCommand { stmCoreController.remove(instance.slotId, releaseReferences = true) }
     }
 
     fun removeSlot(slotId: String) {
@@ -420,103 +411,6 @@ class StmViewModel(container: AppContainer) : ViewModel() {
 
     fun cancelCoreJob(operationId: String) {
         dispatchCoreCommand { stmCoreController.cancelJob(operationId) }
-    }
-
-    fun openAppFiles() {
-        if (mutableAppFilesState.value.listing == null) {
-            loadFiles(AppFileRoot.INTERNAL, "")
-        }
-    }
-
-    fun selectAppFileRoot(root: AppFileRoot) {
-        loadFiles(root, "")
-    }
-
-    fun openAppFile(entry: AppFileEntry) {
-        val listing = mutableAppFilesState.value.listing ?: return
-        if (entry.isDirectory) {
-            loadFiles(listing.root, entry.relativePath)
-            return
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            when (val result = filesRepository.readText(listing.root, entry.relativePath)) {
-                is AppFileResult.Success -> mutableAppFilesState.update {
-                    it.copy(editor = result.value, error = null)
-                }
-
-                is AppFileResult.Failure -> mutableAppFilesState.update {
-                    it.copy(error = result.error)
-                }
-            }
-        }
-    }
-
-    fun navigateUpInAppFiles() {
-        val listing = mutableAppFilesState.value.listing ?: return
-        if (listing.relativeDirectory.isBlank()) return
-        loadFiles(
-            root = listing.root,
-            relativeDirectory = listing.relativeDirectory.substringBeforeLast(
-                delimiter = '/',
-                missingDelimiterValue = "",
-            ),
-        )
-    }
-
-    fun refreshAppFiles() {
-        val listing = mutableAppFilesState.value.listing ?: return openAppFiles()
-        loadFiles(listing.root, listing.relativeDirectory)
-    }
-
-    fun saveAppFile(text: String) {
-        val editor = mutableAppFilesState.value.editor ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            when (val result = filesRepository.writeText(editor.root, editor.relativePath, text)) {
-                is AppFileResult.Success -> {
-                    mutableAppFilesState.update { it.copy(editor = null, error = null) }
-                    refreshAppFiles()
-                }
-
-                is AppFileResult.Failure -> mutableAppFilesState.update {
-                    it.copy(error = result.error)
-                }
-            }
-        }
-    }
-
-    fun closeAppFileEditor() {
-        mutableAppFilesState.update { it.copy(editor = null) }
-    }
-
-    fun deleteAppFile(entry: AppFileEntry) {
-        val listing = mutableAppFilesState.value.listing ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            when (val result = filesRepository.delete(listing.root, entry.relativePath)) {
-                is AppFileResult.Success -> refreshAppFiles()
-                is AppFileResult.Failure -> mutableAppFilesState.update {
-                    it.copy(error = result.error)
-                }
-            }
-        }
-    }
-
-    fun clearAppFileError() {
-        mutableAppFilesState.update { it.copy(error = null) }
-    }
-
-    private fun loadFiles(root: AppFileRoot, relativeDirectory: String) {
-        mutableAppFilesState.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch(Dispatchers.IO) {
-            when (val result = filesRepository.list(root, relativeDirectory)) {
-                is AppFileResult.Success -> mutableAppFilesState.update {
-                    it.copy(listing = result.value, loading = false, error = null)
-                }
-
-                is AppFileResult.Failure -> mutableAppFilesState.update {
-                    it.copy(loading = false, error = result.error)
-                }
-            }
-        }
     }
 
     private fun dispatchCoreCommand(command: suspend () -> StmCoreCommandResult) {

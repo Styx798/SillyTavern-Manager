@@ -286,8 +286,9 @@ internal class StmInstallerCoordinator(
         target: StmCoreSlot,
         active: StmCoreActiveSlot?,
         running: StmCoreActiveSlot?,
+        releaseReferences: Boolean = false,
     ): StmInstallerSubmission = submit(operationId) { control ->
-        runRemove(control, target, active, running)
+        runRemove(control, target, active, running, releaseReferences)
     }
 
     fun verifySlot(
@@ -909,12 +910,13 @@ internal class StmInstallerCoordinator(
         target: StmCoreSlot,
         active: StmCoreActiveSlot?,
         running: StmCoreActiveSlot?,
+        releaseReferences: Boolean,
     ) {
         val startedAt = System.currentTimeMillis()
         var job = newJob(control.operationId, StmCoreJobType.REMOVE, target.id, startedAt)
         try {
             job = beginSimpleJournal(control, job, target, startedAt)
-            val stored = when (val read = activeStore.read()) {
+            var stored = when (val read = activeStore.read()) {
                 StmActiveSlotReadResult.Missing -> null
                 is StmActiveSlotReadResult.Loaded -> read.stored.pointer
                 is StmActiveSlotReadResult.Corrupt -> throw InstallerFailure(
@@ -931,14 +933,25 @@ internal class StmInstallerCoordinator(
                 )
             }
             val previous = stored?.previous
-            if (previous?.slotId == target.id && previous.slotRevision == target.revision) {
+            if (!releaseReferences && previous?.slotId == target.id && previous.slotRevision == target.revision) {
                 throw InstallerFailure(
                     "SLOT_REFERENCED",
                     "The slot is retained as the rollback target",
                 )
             }
+            if (running?.slotId == target.id) {
+                throw InstallerFailure("SLOT_REFERENCED", "The slot is still running")
+            }
             faultInjector.hit(StmInstallerCoordinatorFailpoint.BEFORE_REMOVE_COMMIT_POINT)
             control.enterCommitPoint()
+            if (releaseReferences) {
+                stored = activeStore.releaseReference(
+                    StmActiveSlotRef(target.id, target.revision), control.operationId,
+                )
+                eventSink(StmInstallerEvent.ActiveChanged(stored?.let {
+                    StmCoreActiveSlot(it.current.slotId, it.current.slotRevision, it.activeRevision)
+                }))
+            }
             when (
                 val result = slotStore.deleteSlot(
                     target.id,
@@ -1492,6 +1505,21 @@ internal class StmInstallerCoordinator(
                     DurableCompletionReconciliation.Confirmed(
                         successReceipt.copy(activeRevision = pointer.activeRevision),
                     )
+                } else if (journalHistory.any { removal ->
+                        removal.type == StmInstallerOperationType.REMOVE &&
+                            removal.phase == StmInstallerJournalPhase.COMPLETE &&
+                            (removal.terminalReceipt?.jobState == StmCoreJobState.SUCCEEDED ||
+                                removal.operationId in reconciledCompleteOperationIds) &&
+                            removal.updatedAtEpochMs >= record.updatedAtEpochMs &&
+                            activeStore.releasedPointerForRemoval(removal.operationId)?.let { released ->
+                                released.current.slotId == removal.targetSlotId &&
+                                    ((released.operationId == record.operationId &&
+                                        released.current.slotId == record.targetSlotId) ||
+                                        (recordedRevision != null && released.activeRevision > recordedRevision))
+                            } == true
+                    }
+                ) {
+                    DurableCompletionReconciliation.Confirmed(successReceipt)
                 } else {
                     DurableCompletionReconciliation.Unproven(
                         "JOURNAL_COMPLETE_ACTIVE_MISMATCH",
