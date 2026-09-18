@@ -39,7 +39,6 @@ internal fun SettingsScreen(
     settings: AppSettings,
     onThemeModeSelected: (ThemeMode) -> Unit,
     onLanguageSelected: (AppLanguage) -> Unit,
-    onOpenFiles: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenAdvancedSt: () -> Unit,
     onOpenCompleteRemoval: () -> Unit,
@@ -148,16 +147,6 @@ internal fun SettingsScreen(
                 title = stringResource(R.string.settings_advanced_st_entry_title),
                 summary = stringResource(R.string.settings_advanced_st_entry_summary),
                 onClick = onOpenAdvancedSt,
-            )
-        }
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        SettingsSection(title = stringResource(R.string.settings_files_title)) {
-            SettingsAction(
-                title = stringResource(R.string.settings_files_entry_title),
-                summary = stringResource(R.string.settings_files_entry_summary),
-                onClick = onOpenFiles,
             )
         }
 

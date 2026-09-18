@@ -303,13 +303,8 @@ class StmCoreClient(
         StmCoreProtocol.commandMessage(StmCoreProtocol.MESSAGE_ROLLBACK_SLOT, operationId),
     )
 
-    fun requestRemove(operationId: String, slotId: String): Boolean = requestBoundCommand(
-        StmCoreProtocol.targetCommandMessage(
-            StmCoreProtocol.MESSAGE_REMOVE_SLOT,
-            operationId,
-            slotId,
-        ),
-    )
+    fun requestRemove(operationId: String, slotId: String, releaseReferences: Boolean = false): Boolean =
+        requestBoundCommand(StmCoreProtocol.removeMessage(operationId, slotId, releaseReferences))
 
     fun requestVerifySlot(operationId: String, slotId: String): Boolean = requestBoundCommand(
         StmCoreProtocol.targetCommandMessage(

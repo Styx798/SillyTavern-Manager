@@ -33,6 +33,48 @@ import org.junit.Test
 
 class StmInstallerCoordinatorTest {
     @Test
+    fun `explicit removal releases rollback and current while retaining user data`() {
+        val f = fixture()
+        val a = f.install("remove-a", 1, f.createSyntheticArtifact("remove-a.zip", "1".repeat(40), "a"))
+        val b = f.install("remove-b", 2, f.createSyntheticArtifact("remove-b.zip", "2".repeat(40), "b"))
+        val active = f.activate(b, f.activate(a, null))
+        val sentinel = f.root.resolve("files/stm_instances/user-data.txt")
+        requireNotNull(sentinel.parentFile).mkdirs()
+        sentinel.writeText("keep")
+        val removePrevious = UUID.randomUUID().toString()
+        f.coordinator.remove(removePrevious, a, active, null, releaseReferences = true)
+        assertEquals(StmCoreJobState.SUCCEEDED, f.awaitTerminalJob(removePrevious).state)
+        val remaining = requireNotNull(f.events.filterIsInstance<StmInstallerEvent.ActiveChanged>().last().active)
+        assertEquals(b.id, remaining.slotId)
+        assertFalse(f.root.resolve("core/slots/remove-a").exists())
+        val removeCurrent = UUID.randomUUID().toString()
+        f.coordinator.remove(removeCurrent, b, remaining, null, releaseReferences = true)
+        assertEquals(StmCoreJobState.SUCCEEDED, f.awaitTerminalJob(removeCurrent).state)
+        assertEquals(null, f.events.filterIsInstance<StmInstallerEvent.ActiveChanged>().last().active)
+        assertFalse(f.root.resolve("core/slots/remove-b").exists())
+        assertEquals("keep", sentinel.readText())
+        f.coordinator.close()
+        val recovered = openFixture(root = f.root)
+        assertEquals(null, recovered.events.filterIsInstance<StmInstallerEvent.ActiveChanged>().last().active)
+        assertEquals("keep", sentinel.readText())
+        recovered.coordinator.close()
+    }
+
+    @Test
+    fun `explicit removal still refuses running program before touching pointer`() {
+        val f = fixture()
+        val slot = f.install("running", 1, f.createSyntheticArtifact("running.zip", "3".repeat(40), "a"))
+        val active = f.activate(slot, null)
+        val before = f.root.resolve("core/state/active-slot").readBytes().toList()
+        val operation = UUID.randomUUID().toString()
+        f.coordinator.remove(operation, slot, active, active, releaseReferences = true)
+        assertEquals(StmCoreJobState.FAILED, f.awaitTerminalJob(operation).state)
+        assertEquals(before, f.root.resolve("core/state/active-slot").readBytes().toList())
+        assertTrue(f.root.resolve("core/slots/running").exists())
+        f.coordinator.close()
+    }
+
+    @Test
     fun `COMPLETE recovery rebuilds v1 mutations and v2 VERIFY from durable evidence`() {
         val first = fixture()
         val slotA = first.install(

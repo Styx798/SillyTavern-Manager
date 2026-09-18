@@ -112,7 +112,9 @@ internal class StmActiveSlotStore(
     }
 
     @Synchronized
-    fun write(pointer: StmActiveSlotPointer): StmStoredActiveSlotPointer {
+    fun write(pointer: StmActiveSlotPointer): StmStoredActiveSlotPointer = writePointer(pointer)
+
+    private fun writePointer(pointer: StmActiveSlotPointer, removed: StmActiveSlotRef? = null): StmStoredActiveSlotPointer {
         pointer.requireValid()
         val parent = requireNotNull(currentFile.parentFile)
         Files.createDirectories(parent.toPath())
@@ -131,7 +133,13 @@ internal class StmActiveSlotStore(
             return existing.stored
         }
 
-        validateTransition(existing?.stored?.pointer, pointer)
+        if (removed == null) {
+            validateTransition(existing?.stored?.pointer, pointer)
+        } else {
+            val old = requireNotNull(existing).stored.pointer
+            require(old.previous == removed && pointer.previous == null && pointer.current == old.current)
+            require(old.activeRevision < Long.MAX_VALUE && pointer.activeRevision == old.activeRevision + 1)
+        }
         val encoded = encode(pointer)
         val stored = decode(encoded)
 
@@ -152,6 +160,37 @@ internal class StmActiveSlotStore(
         )
         bestEffortSyncDirectory(parent.toPath())
         return stored
+    }
+
+    fun releasedPointerForRemoval(operationId: String): StmActiveSlotPointer? {
+        require(UUID.fromString(operationId).toString() == operationId)
+        val file = requireNotNull(currentFile.parentFile).toPath()
+            .resolve(QUARANTINE_DIRECTORY).resolve("${currentFile.name}-$operationId")
+        return (readOne(file) as? FileReadResult.Valid)?.stored?.pointer
+    }
+
+    /** Called after the removal commit point, before any program files are deleted. */
+    @Synchronized
+    fun releaseReference(target: StmActiveSlotRef, operationId: String): StmActiveSlotPointer? {
+        val old = when (val result = read()) {
+            StmActiveSlotReadResult.Missing -> return null
+            is StmActiveSlotReadResult.Corrupt -> throw IOException(result.detail)
+            is StmActiveSlotReadResult.Loaded -> result.stored.pointer
+        }
+        if (old.current == target) {
+            // The previous document must leave authority first. An interruption can retain
+            // the old pointer, but the caller has not deleted its program tree yet.
+            quarantineForRecovery(operationId)
+            return null
+        }
+        if (old.previous != target) return old
+        val next = old.copy(previous = null, activeRevision = Math.addExact(old.activeRevision, 1),
+            operationId = operationId)
+        writePointer(next, removed = target)
+        // Recovery from a damaged current document must not resurrect the removed reference.
+        writeAtomicWithoutFaults(previousFile.toPath(), encode(next))
+        bestEffortSyncDirectory(requireNotNull(currentFile.parentFile).toPath())
+        return next
     }
 
     /**

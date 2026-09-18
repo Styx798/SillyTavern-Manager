@@ -326,8 +326,8 @@ class AndroidStmCoreController(context: Context) :
     override suspend fun rollback(): StmCoreCommandResult =
         deliverMaintenanceCommand(client::requestRollback)
 
-    override suspend fun remove(slotId: String): StmCoreCommandResult =
-        deliverMaintenanceCommand { operationId -> client.requestRemove(operationId, slotId) }
+    override suspend fun remove(slotId: String, releaseReferences: Boolean): StmCoreCommandResult =
+        deliverMaintenanceCommand { operationId -> client.requestRemove(operationId, slotId, releaseReferences) }
 
     override suspend fun verifySlot(slotId: String): StmCoreCommandResult =
         deliverMaintenanceCommand { operationId -> client.requestVerifySlot(operationId, slotId) }
