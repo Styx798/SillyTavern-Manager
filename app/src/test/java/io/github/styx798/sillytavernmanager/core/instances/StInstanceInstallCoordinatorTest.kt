@@ -135,6 +135,82 @@ class StInstanceInstallCoordinatorTest {
         assertEquals(commit, registry.value.pendingInstall?.expectedCommitSha)
     }
 
+    @Test
+    fun `core cancellation clears a running install and allows another installation`() = runTest {
+        val commit = "c".repeat(40)
+        val core = MutableStateFlow(StmCoreState())
+        val registry = MutableStateFlow(StInstanceState())
+        val downloads = MutableStateFlow(StDownloadState(archives = listOf(
+            DownloadedStArchive(
+                StDownloadChannel.STABLE, "source.zip", 1,
+                identity = StArchiveIdentity(StArchiveIdentityClassification.EXACT_COMMIT,
+                    channelRef = "release", exactCommit = commit),
+            ),
+        )))
+        val submissions = mutableListOf<String>()
+        val cleared = mutableListOf<String>()
+        val coordinator = StInstanceInstallCoordinator(
+            backgroundScope,
+            proxy<StDownloadRepository> { name, _ -> if (name == "getState") downloads else Unit },
+            proxy<StInstanceRepository> { name, args ->
+                when (name) {
+                    "getState" -> registry
+                    "beginInstall" -> {
+                        check(registry.value.pendingInstall == null)
+                        registry.value = registry.value.copy(
+                            pendingInstall = args[0] as StPendingInstanceInstall,
+                        )
+                        Unit
+                    }
+                    "clearPendingInstall" -> {
+                        cleared += args[0] as String
+                        registry.value = registry.value.copy(pendingInstall = null)
+                        Unit
+                    }
+                    else -> error("Unexpected repository call: $name")
+                }
+            },
+            proxy<StmCoreController> { name, args ->
+                when (name) {
+                    "getState" -> core
+                    "installDownloadedArchive" -> {
+                        submissions += args[0] as String
+                        StmCoreCommandResult.Accepted
+                    }
+                    else -> error("Unexpected controller call: $name")
+                }
+            },
+            proxy<LogRepository> { _, _ -> Unit },
+        )
+        coordinator.install("Home", exactCommit = commit)
+        runCurrent()
+        val pending = requireNotNull(registry.value.pendingInstall)
+        val cancelled = StmCoreJob(
+            operationId = "cancelled-operation", type = StmCoreJobType.INSTALL,
+            targetId = "another-slot", phase = StmCoreJobPhase.CLEANING_UP,
+            state = StmCoreJobState.CANCELLED, startedAtEpochMs = 1, updatedAtEpochMs = 2,
+        )
+        core.value = core.value.copy(jobs = listOf(cancelled))
+        runCurrent()
+        assertEquals(StInstanceInstallPhase.INSTALLING, coordinator.state.value.phase)
+        assertEquals(pending, registry.value.pendingInstall)
+
+        // Core shutdown cancels the job without a UI cancel() request.
+        core.value = core.value.copy(jobs = listOf(cancelled.copy(targetId = pending.slotId)))
+        runCurrent()
+        assertEquals(StInstanceInstallPhase.CANCELLED, coordinator.state.value.phase)
+        assertFalse(coordinator.state.value.active)
+        assertNull(registry.value.pendingInstall)
+        assertEquals(listOf(pending.instanceId), cleared)
+        assertTrue(registry.value.instances.isEmpty())
+
+        coordinator.install("Home", exactCommit = commit)
+        runCurrent()
+        assertEquals(StInstanceInstallPhase.INSTALLING, coordinator.state.value.phase)
+        assertEquals(2, submissions.size)
+        assertNotEquals(pending.slotId, submissions.last())
+    }
+
     private inline fun <reified T> proxy(crossinline handle: (String, Array<out Any?>) -> Any?): T =
         Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, method, args ->
             handle(method.name.substringBefore('-'), args ?: emptyArray())
