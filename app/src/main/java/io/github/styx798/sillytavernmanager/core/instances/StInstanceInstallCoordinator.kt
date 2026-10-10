@@ -258,9 +258,7 @@ class StInstanceInstallCoordinator(
             .filter { it.type == StmCoreJobType.INSTALL && it.targetId == slotId }
             .maxByOrNull { it.updatedAtEpochMs }
         if (job != null) {
-            if (install.phase == StInstanceInstallPhase.CANCELLING &&
-                job.state == StmCoreJobState.CANCELLED
-            ) {
+            if (job.state == StmCoreJobState.CANCELLED) {
                 clearPending(install)
                 mutableState.value = install.copy(
                     phase = StInstanceInstallPhase.CANCELLED,
